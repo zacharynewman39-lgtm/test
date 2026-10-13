@@ -105,7 +105,7 @@ export async function makeMaterials(renderer, base) {
   });
   const cornea = new THREE.MeshPhysicalMaterial({
     name: 'cornea', color: 0xffffff, roughness: 0.0, metalness: 0,
-    transmission: 1.0, thickness: 0.0015, ior: 1.376, specularIntensity: 1.0,
+    transmission: 1.0, thickness: 0.0006, ior: 1.25, specularIntensity: 1.0,
     envMapIntensity: 1.6, transparent: false,
   });
   const lash = new THREE.MeshStandardMaterial({

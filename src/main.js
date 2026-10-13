@@ -133,6 +133,7 @@ window.addEventListener('wheel', (e) => {
 
 // debug/screenshot hook
 window.__setView = (o) => { Object.assign(insp, o); inspect = true; player.enabled = false; };
+window.__play = () => { inspect = false; player.enabled = true; };
 
 window.addEventListener('resize', () => {
   camera.aspect = window.innerWidth / window.innerHeight;
