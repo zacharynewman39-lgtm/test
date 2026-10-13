@@ -1,0 +1,4 @@
+node_modules
+dist
+tools/npc/.cache_body.npz
+tools/npc/__pycache__

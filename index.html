@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>NPC Sandbox</title>
+    <style>
+      html, body { margin: 0; height: 100%; overflow: hidden; background: #9fb4c8; }
+      canvas { display: block; }
+      #hud {
+        position: fixed; left: 16px; bottom: 16px; color: #fff;
+        font: 13px/1.5 system-ui, sans-serif; text-shadow: 0 1px 2px #000a;
+        pointer-events: none; user-select: none;
+      }
+      #hud b { color: #ffd479; }
+      #loading {
+        position: fixed; inset: 0; display: grid; place-items: center;
+        color: #fff; font: 15px system-ui, sans-serif; background: #0008;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="loading">Loading…</div>
+    <div id="hud">
+      <b>Click</b> to look around · <b>WASD</b> move · <b>Shift</b> run · <b>Space</b> jump · <b>Scroll</b> zoom<br />
+      <b>F</b> inspect the man up close (drag to orbit, scroll to zoom, F to exit)
+    </div>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
