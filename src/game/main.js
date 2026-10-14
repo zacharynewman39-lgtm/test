@@ -333,7 +333,7 @@ function menu() {
     <p>Dispatch lost contact with the family at 1147 Alder Road four hours ago.<br>
     Neighbours report chanting. Nobody's come out. You're the only unit on scene.</p>
     <p style="opacity:.65">
-      <kbd>WASD</kbd> move · <kbd>Shift</kbd> sprint · <kbd>C</kbd> crouch · <kbd>LMB</kbd> fire · <kbd>RMB</kbd> aim<br>
+      <kbd>WASD</kbd> move · <kbd>Q</kbd> sprint · <kbd>C</kbd> crouch · <kbd>LMB</kbd> fire · <kbd>Shift</kbd> aim<br>
       <kbd>R</kbd> reload · <kbd>1</kbd>/<kbd>2</kbd> rifle / shotgun · <kbd>F</kbd> flashlight<br>
       <kbd>E</kbd> open doors · hold <kbd>E</kbd> free hostages · <kbd>V</kbd> kick</p>
     <div class="go">CLICK TO BREACH</div>`, start);

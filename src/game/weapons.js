@@ -192,7 +192,7 @@ export class Weapons {
     }
 
     const busy = this.reloading > 0 || this.switchT > 0 || !P.alive;
-    this.aiming = !!input.rmb && !busy && !P.sprinting;
+    this.aiming = !!(input.rmb || input.keys.ShiftLeft || input.keys.ShiftRight) && !busy && !P.sprinting;
     this.ads += ((this.aiming ? 1 : 0) - this.ads) * (1 - Math.exp(-14 * dt));
 
     const trig = !!input.lmb;

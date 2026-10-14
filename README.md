@@ -13,8 +13,9 @@ npm run dev        # open the printed localhost URL
 
 | Input | Action |
 | --- | --- |
-| W A S D / Shift / C | Move / sprint / crouch |
-| Mouse, LMB, RMB | Look, fire, aim down sights |
+| W A S D / Q / C | Move / sprint / crouch |
+| Mouse, LMB | Look, fire |
+| Shift (or RMB) | Aim down sights |
 | R | Reload (the shotgun loads shell by shell; fire to interrupt) |
 | 1 / 2 or wheel | Rifle / shotgun |
 | F | Flashlight |

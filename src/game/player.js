@@ -80,7 +80,7 @@ export class FPSPlayer {
     const g = this.game;
     const k = input.keys;
     if (this.alive) {
-      this.crouched = !!(k.KeyC || k.ControlLeft);
+      this.crouched = !!k.KeyC;
       const fwd = new THREE.Vector3(-Math.sin(this.yaw), 0, -Math.cos(this.yaw));
       const right = new THREE.Vector3(-fwd.z, 0, fwd.x);
       const wish = new THREE.Vector3();
@@ -88,7 +88,7 @@ export class FPSPlayer {
       if (k.KeyS) wish.sub(fwd);
       if (k.KeyD) wish.add(right);
       if (k.KeyA) wish.sub(right);
-      this.sprinting = !!(k.ShiftLeft || k.ShiftRight) && !!k.KeyW && !this.crouched && !g.weapons.aiming;
+      this.sprinting = !!k.KeyQ && !!k.KeyW && !this.crouched && !g.weapons.aiming;
       let speed = this.crouched ? 1.6 : this.sprinting ? 5.4 : 3.1;
       if (g.weapons.aiming) speed *= 0.6;
       if (this.hp < 30) speed *= 0.8;
