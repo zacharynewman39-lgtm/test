@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { Sky } from 'three/addons/objects/Sky.js';
 import { Player } from './player.js';
-import { loadNPC } from './npc.js';
+import { createGoreWorld, WEAPONS } from './npc-kit/index.js';
 
 const SHOT = new URLSearchParams(location.search).has('shot'); // headless screenshot mode
 const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance', preserveDrawingBuffer: SHOT });
@@ -96,11 +96,16 @@ scene.add(player.mesh);
 player.mesh.position.set(0, 0, 4);
 player.yaw = 0;
 
-let npc = null;
-loadNPC(renderer).then((n) => {
-  npc = n;
-  window.__npc = n;
-  scene.add(npc.root);
+const world = createGoreWorld({ scene, renderer, baseUrl: import.meta.env.BASE_URL + 'npc/' });
+let gnpc = null;   // the NPC (with anatomy, physiology, gore)
+let npc = null;    // its animated body
+world.spawnNPC({ position: new THREE.Vector3(0, 0, 0) }).then((n) => {
+  gnpc = n;
+  npc = n.npc;
+  window.__gnpc = n;
+  window.__npc = npc;
+  window.__world = world;
+  window.__THREE = THREE;
   player.colliders.push({ x: 0, z: 0, r: 0.38 });
   document.getElementById('loading').remove();
   window.__npcReady = true;
@@ -108,6 +113,43 @@ loadNPC(renderer).then((n) => {
   document.getElementById('loading').textContent = 'Failed to load NPC: ' + e.message;
   console.error(e);
 });
+
+// ---------------------------------------------------------------- shooting
+let weapon = 'pistol';
+const hud = document.getElementById('vitals');
+const log = document.getElementById('log');
+function fire() {
+  if (!gnpc) return;
+  const origin = camera.position.clone();
+  const dir = new THREE.Vector3();
+  camera.getWorldDirection(dir);
+  const r = world.shoot(origin, dir, weapon);
+  if (r.hit) {
+    const lines = [`<b>${WEAPONS[weapon].label}</b>: ${[...new Set(r.parts)].slice(0, 9).join(' → ')}${r.parts.length > 9 ? ' …' : ''}`, ...r.events];
+    log.innerHTML = lines.map((l) => `<div>${l}</div>`).join('') + log.innerHTML;
+    log.innerHTML = log.innerHTML.split('</div>').slice(0, 14).join('</div>');
+  }
+}
+renderer.domElement.addEventListener('mousedown', (e) => {
+  if (e.button === 0 && document.pointerLockElement === renderer.domElement) fire();
+});
+window.addEventListener('keydown', (e) => {
+  if (e.code === 'Digit1') weapon = 'pistol';
+  if (e.code === 'Digit2') weapon = 'rifle';
+  if (e.code === 'Digit3') weapon = 'shotgun';
+  if (e.code === 'KeyX') world.setXRay((world.xray + 1) % 5);
+  if (e.code === 'KeyR' && gnpc) { world.blood.clear(); gnpc.reset(); log.innerHTML = ''; }
+});
+function updateHud() {
+  if (!gnpc) return;
+  const v = gnpc.vitals;
+  const status = !v.alive ? `<span style="color:#ff5050">DEAD</span> — ${v.cause}` :
+    v.consciousness < 0.3 ? '<span style="color:#ffb050">unconscious</span>' : 'conscious';
+  hud.innerHTML = `${WEAPONS[weapon].label} &nbsp;|&nbsp; ${status}<br>
+    HR ${v.hr} &nbsp; BP ${v.bp} &nbsp; SpO₂ ${v.spo2}% &nbsp; RR ${v.rr}<br>
+    blood ${v.blood_ml} mL (−${v.lost_ml}, ${v.lossPct}%, class ${v.shockClass}) &nbsp; bleeding ${v.bleed_ml_min} mL/min<br>
+    internal ${v.internal_ml} mL &nbsp; external ${v.external_ml} mL &nbsp; on ground ${Math.round(world.blood.totalOnGround)} mL`;
+}
 
 // inspect mode: orbit camera around his head
 let inspect = false;
@@ -157,7 +199,8 @@ function frame() {
     );
     camera.lookAt(focus);
   }
-  if (npc) npc.update(dt, t, camera.position, player.mesh.position);
+  if (gnpc) world.update(dt, { camera, playerPos: player.mesh.position });
+  updateHud();
 
   // keep the shadow frustum around the action
   const c = npc ? npc.root.position.clone().lerp(player.mesh.position, 0.5) : player.mesh.position;
@@ -167,10 +210,16 @@ function frame() {
   if (!SHOT) requestAnimationFrame(frame);
 }
 if (SHOT) {
+  window.__sim = (steps = 1, dt = 1 / 30) => {
+    for (let i = 0; i < steps; i++) {
+      player.update(dt);
+      if (gnpc) world.update(dt, { camera, playerPos: player.mesh.position });
+    }
+  };
   window.__frame = (steps = 1, dt = 1 / 30) => {
     for (let i = 0; i < steps; i++) {
       player.update(dt);
-      if (npc) npc.update(dt, (window.__t = (window.__t || 0) + dt), camera.position, player.mesh.position);
+      if (gnpc) world.update(dt, { camera, playerPos: player.mesh.position });
     }
     frame();
     return renderer.domElement.toDataURL('image/png');

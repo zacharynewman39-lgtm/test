@@ -1,4 +1,4 @@
 node_modules
 dist
 tools/npc/.cache_body.npz
-tools/npc/__pycache__
+__pycache__/

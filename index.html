@@ -13,6 +13,13 @@
         pointer-events: none; user-select: none;
       }
       #hud b { color: #ffd479; }
+      #crosshair { position: fixed; left: 50%; top: 50%; width: 6px; height: 6px; margin: -3px 0 0 -3px;
+        border-radius: 50%; border: 1.5px solid #fff; box-shadow: 0 0 2px #000; pointer-events: none; }
+      #vitals, #log { position: fixed; right: 16px; color: #fff; font: 12px/1.45 ui-monospace, monospace;
+        text-shadow: 0 1px 2px #000; background: #0006; padding: 8px 10px; border-radius: 6px; pointer-events: none; max-width: 46vw; }
+      #vitals { top: 16px; }
+      #log { top: 110px; max-height: 50vh; overflow: hidden; }
+      #log:empty, #vitals:empty { display: none; }
       #loading {
         position: fixed; inset: 0; display: grid; place-items: center;
         color: #fff; font: 15px system-ui, sans-serif; background: #0008;
@@ -21,8 +28,12 @@
   </head>
   <body>
     <div id="loading">Loading…</div>
+    <div id="crosshair"></div>
+    <div id="vitals"></div>
+    <div id="log"></div>
     <div id="hud">
       <b>Click</b> to look around · <b>WASD</b> move · <b>Shift</b> run · <b>Space</b> jump · <b>Scroll</b> zoom<br />
+      <b>Left click</b> fire · <b>1/2/3</b> pistol / rifle / shotgun · <b>X</b> anatomy x-ray layers · <b>R</b> reset him<br />
       <b>F</b> inspect the man up close (drag to orbit, scroll to zoom, F to exit)
     </div>
     <script type="module" src="/src/main.js"></script>

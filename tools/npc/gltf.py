@@ -14,6 +14,7 @@ class GLB:
         self.nodes, self.meshes, self.skins, self.materials = [], [], [], []
         self.scene_nodes = []
         self._mat_index = {}
+        self.extensions_used = set()
 
     def _view(self, data, target=None):
         while len(self.bin) % 4:
@@ -62,6 +63,17 @@ class GLB:
             a['min'] = arr.min(0).astype(float).tolist()
             a['max'] = arr.max(0).astype(float).tolist()
         self.accessors.append(a)
+        return len(self.accessors) - 1
+
+    def accessor_packed_normals(self, N):
+        """int8 normals padded to 4 bytes (KHR_mesh_quantization)."""
+        q = np.zeros((len(N), 4), np.int8)
+        q[:, :3] = np.round(np.clip(N, -1, 1) * 127)
+        v = self._view(q.tobytes(), 34962)
+        self.views[v]['byteStride'] = 4
+        self.accessors.append({'bufferView': v, 'componentType': 5120, 'count': len(N),
+                               'type': 'VEC3', 'normalized': True})
+        self.extensions_used.add('KHR_mesh_quantization')
         return len(self.accessors) - 1
 
     def material(self, name, color=(0.8, 0.8, 0.8, 1.0)):
@@ -142,6 +154,25 @@ class GLB:
             node['skin'] = 0
         return self.add_node(node)
 
+    def add_mesh_shared(self, name, src_node, idx, material, skin=True):
+        """Another mesh reusing src mesh's vertex attributes/targets with its own triangles."""
+        src = self.meshes[self.nodes[src_node]['mesh']]
+        sp = src['primitives'][0]
+        prim = {'attributes': dict(sp['attributes']),
+                'indices': self.accessor(idx.reshape(-1), UINT, target=34963),
+                'material': self.material(material)}
+        if 'targets' in sp:
+            prim['targets'] = sp['targets']
+        mesh = {'name': name, 'primitives': [prim]}
+        if 'extras' in src:
+            mesh['extras'] = src['extras']
+            mesh['weights'] = list(src['weights'])
+        self.meshes.append(mesh)
+        node = {'name': name, 'mesh': len(self.meshes) - 1}
+        if skin:
+            node['skin'] = 0
+        return self.add_node(node)
+
     def write(self, path, root_name='NPC', root_children=()):
         root = self.add_node({'name': root_name,
                               'children': [self.root_bone] + list(root_children)})
@@ -152,6 +183,9 @@ class GLB:
             'materials': self.materials, 'accessors': self.accessors,
             'bufferViews': self.views, 'buffers': [{'byteLength': len(self.bin)}],
         }
+        if self.extensions_used:
+            doc['extensionsUsed'] = sorted(self.extensions_used)
+            doc['extensionsRequired'] = sorted(self.extensions_used)
         js = json.dumps(doc, separators=(',', ':')).encode()
         while len(js) % 4:
             js += b' '

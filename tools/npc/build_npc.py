@@ -108,16 +108,9 @@ def morph_normals(P, tris, N0, morphs):
     return out
 
 
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument('--mh', default=os.environ.get('MH'), required=False)
-    ap.add_argument('--out', default=OUT_DEFAULT)
-    ap.add_argument('--hair', type=int, default=60000)
-    args = ap.parse_args()
-    os.makedirs(args.out, exist_ok=True)
-
-    mh = MHData(args.mh).load_base()
-    log('shaping')
+def shaped_body(mh):
+    """Shape the MakeHuman base into our man (metres, feet on y=0) and return
+    vertices, expression deltas, skin weights, skeleton and eye proxy."""
     Vdm = mh.shape(mh.macro_targets(**MACRO) + FACE)
     body_fv, body_ft = mh.group_faces(lambda g: g == 'body')
     bverts = np.unique(body_fv)
@@ -130,35 +123,26 @@ def main():
 
     V = to_m(Vdm)
     nV = len(V)
-
-    # expression deltas (dense, base vertex space, meters)
     D = {}
     for name, parts in MORPHS.items():
         d = np.zeros((nV, 3))
         for t, w in parts:
             d += mh.target_dense(EXPR + t + '.target') * w * s
         D[name] = d
-
-    # skeleton
     bones, wdict = mh.skeleton(Vdm)
     for b in bones:
         b['head'] = to_m(b['head'])
         b['tail'] = to_m(b['tail'])
     bidx = {b['name']: i for i, b in enumerate(bones)}
-    nb = len(bones)
-    W = np.zeros((nV, nb))
+    W = np.zeros((nV, len(bones)))
     for bn, lst in wdict.items():
         if bn not in bidx:
             continue
         a = np.array(lst)
         W[a[:, 0].astype(int), bidx[bn]] = a[:, 1]
-
-    # eyes: fit high poly proxy, recentre eye bones on eyeball centres
     EP, _, _, eobj = mh.fit_proxy('eyes/high-poly/high-poly.mhclo', Vdm)
     EP = to_m(EP)
     _, EVT, EF, EFT = load_simple_obj(eobj)
-    EF = np.array(EF)
-    EFT = np.array(EFT)
     left = EP[:, 0] > 0
     eye_info = {}
     for side, m in (('L', left), ('R', ~left)):
@@ -166,6 +150,26 @@ def main():
         r = np.linalg.norm(EP[m] - c, axis=1).max()
         bones[bidx['eye.' + side]]['head'] = c
         eye_info[side] = (c, r)
+    return dict(V=V, D=D, W=W, bones=bones, bidx=bidx, body_fv=body_fv, body_ft=body_ft,
+                bverts=bverts, EP=EP, EF=np.array(EF), EFT=np.array(EFT), EVT=EVT,
+                left=left, eye_info=eye_info, scale=s)
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument('--mh', default=os.environ.get('MH'), required=False)
+    ap.add_argument('--out', default=OUT_DEFAULT)
+    ap.add_argument('--hair', type=int, default=60000)
+    args = ap.parse_args()
+    os.makedirs(args.out, exist_ok=True)
+
+    mh = MHData(args.mh).load_base()
+    log('shaping')
+    body = shaped_body(mh)
+    V, D, W, bones, bidx = body['V'], body['D'], body['W'], body['bones'], body['bidx']
+    body_fv, body_ft, bverts = body['body_fv'], body['body_ft'], body['bverts']
+    EP, EF, EFT, EVT, left, eye_info = (body[k] for k in ('EP', 'EF', 'EFT', 'EVT', 'left', 'eye_info'))
+    nV, nb = len(V), len(bones)
 
     glb = GLB()
     glb.add_skeleton(bones)
@@ -283,6 +287,8 @@ def main():
     keep = ~covered[vpi][tris].all(1)
     body_prim['idx'] = tris[keep]
     meshes[body_index] = glb.add_mesh('Body', [body_prim])
+    # the covered skin is kept as its own mesh: only drawn around wounds
+    meshes.append(glb.add_mesh_shared('BodyHidden', meshes[body_index], tris[~keep], 'skin_hidden'))
     log('body tris kept', int(keep.sum()), 'of', len(tris))
 
     out = os.path.join(args.out, 'npc.glb')
