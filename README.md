@@ -1,8 +1,8 @@
-# NPC Sandbox
+# Black House (working title)
 
-A blank 3D plane, a block you drive around in third person, and one NPC: a
-detailed, realistically built man. The NPC is the point of this project; the
-rest is kept deliberately simple.
+A dark, gory, solo SWAT-style FPS that runs in the browser. You raid a
+cult-occupied house alone at night: clear it room by room, free the hostages
+before they're executed, and put down every suspect.
 
 ## Run it
 
@@ -11,16 +11,69 @@ npm install
 npm run dev        # open the printed localhost URL
 ```
 
-Controls:
-
 | Input | Action |
 | --- | --- |
-| Click | Capture the mouse to look around |
-| W A S D | Move the block |
-| Shift | Run |
-| Space | Jump |
-| Mouse wheel | Zoom the camera |
-| F | Inspect mode: orbit his head up close (drag to orbit, scroll to zoom, F again to exit) |
+| W A S D / Shift / C | Move / sprint / crouch |
+| Mouse, LMB, RMB | Look, fire, aim down sights |
+| R | Reload (the shotgun loads shell by shell; fire to interrupt) |
+| 1 / 2 or wheel | Rifle / shotgun |
+| F | Flashlight |
+| E | Open/close doors; hold to free a hostage |
+| V | Kick a door open (loud) or kick a suspect back |
+
+## What's in it
+
+- **The house** (`src/game/level.js`): an ASCII floor plan with 8 rooms,
+  hinged doors, furniture, flickering lights and a nav grid. Edit `MAP`,
+  `OPENINGS`, `FURNITURE` and `SPAWNS` to change the layout.
+- **Suspects** (`src/game/enemy.js`): masked cultists with different
+  behaviours. Guards and patrols investigate gunfire. Ambushers crouch and
+  wait. One plays dead until you walk past. The executioner goes for the
+  hostage the moment he spots you.
+- **Wounds** (`src/game/body.js`, `actor.js`): every hit resolves to an
+  organ (brain, heart, lungs, liver, spine, femoral artery…). Each organ has
+  its own damage, bleed rate and effect:
+  - Leg hits cause limping, and both legs (or the spine) put him on the floor
+    crawling at you.
+  - A gun-hand hit disarms him.
+  - Heart and neck hits cause panic, then he bleeds out.
+- **Gore** (`src/game/gore.js`): blood spray particles, exit-wound splatter on
+  walls, drips and trails, spreading pools, severable limbs, exploding heads
+  and pumping stumps.
+- **Hostages** (`src/game/hostage.js`): hooded and kneeling, and they sob.
+  Free them with E and they run for the street. Your bullets hurt them too.
+- **Audio** (`src/game/audio.js`): every sound is synthesised, positional, and
+  muffled through walls.
+
+## Swapping in the real enemy model
+
+The enemies currently use a placeholder body made of primitives. Everything
+else talks to it through the `Body` class in `src/game/body.js`. To use the
+anatomical model, write a replacement with the same surface:
+
+| Member | What it must do |
+| --- | --- |
+| `root` | Object3D with feet at the origin, facing +z |
+| `j` | Named joints (`pelvis`, `spine`, `chest`, `neck`, `head`, `uArmL`… `footR`) that the pose functions rotate |
+| `hitMeshes` | Meshes bullets can hit, each with `userData.body` and `userData.part` |
+| `resolveHit(mesh, point)` | Return `{ part, organ, side, info }`. With real organs this becomes "which organ mesh did the ray hit" |
+| `sever(part, scene)`, `destroyHead(scene)` | Detach a limb or head and return the stump |
+| `addWound`, `blendPose`, `world`, `headPos` | As in the placeholder |
+
+Drop the model into `public/` as a `.glb`. Keep internal layers (muscle,
+organs, bones, nerves) as separate named meshes so hits can be resolved
+against them directly.
+
+## Headless testing
+
+Open `/?test` to get `window.__game.test.start()` and `.step(n)`, which
+advance the simulation deterministically and return a screenshot.
+
+---
+
+# NPC sandbox
+
+The original detailed-NPC sandbox is still available at `/sandbox.html`.
 
 ## The man
 
