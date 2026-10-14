@@ -4,7 +4,7 @@ import { flashTexture, fbm } from './textures.js';
 export const DEFS = {
   rifle: {
     name: 'AR-10 7.62 · Semi', round: 'rifle', mag: 20, reserve: 120, rpm: 600, auto: false, damage: 52, pellets: 1, penetration: 2,
-    hip: 0.03, ads: 0.002, recoil: 0.026, reload: 2.1, sound: 'rifle', fov: 50, adsZ: -0.2,
+    hip: 0.008, ads: 0, recoil: 0.026, reload: 2.1, sound: 'rifle', fov: 50, adsZ: -0.2,
   },
   shotgun: {
     name: 'M870 Shotgun', round: 'shotgun', mag: 6, reserve: 36, rpm: 75, auto: false, damage: 21, pellets: 10, penetration: 0,
@@ -336,7 +336,7 @@ export class Weapons {
     a.mag--;
     this.cool = 60 / d.rpm;
     if (this.current === 'shotgun') this.pumpT = 0.55;
-    const moveK = 1 + Math.min(P.speed / 3, 1.5) * (this.ads > 0.5 ? 0.6 : 1.5);
+    const moveK = 1 + Math.min(P.speed / 3, 1.5) * (this.ads > 0.5 ? 0.2 : 0.6);
     const spread = THREE.MathUtils.lerp(d.hip, d.ads, this.ads) * moveK * (P.crouched ? 0.75 : 1);
     const cam = this.main;
     const origin = cam.getWorldPosition(new THREE.Vector3());

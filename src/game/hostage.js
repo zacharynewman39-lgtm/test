@@ -6,8 +6,9 @@ import { KitBody } from './kitbody.js';
 export class Hostage extends Actor {
   constructor(game, spawn) {
     const look = { shirt: 0x6d6a5a, pants: 0x3a4250, skin: 0xd0a68a, bag: true };
-    const body = spawn.kit ? new KitBody(spawn.kit, { bag: true }) : new Body(look);
+    const body = spawn.kit ? new KitBody(spawn.kit, {}) : new Body(look);
     super(game, body, spawn.x, spawn.z, spawn.h);
+    if (this.kit) this.kit.fear = 0.7; // terrified until freed
     this.state = 'captive';
     this.free = 0; // hold-E progress
     this.phase = 0;
@@ -18,6 +19,7 @@ export class Hostage extends Actor {
 
   rescue() {
     this.state = 'leaving';
+    if (this.kit) this.kit.fear = 0.25;
     if (this.body.removeBag) this.body.removeBag();
     const bag = this.body.hitMeshes.find((m) => m.userData.sack);
     if (bag) { bag.visible = false; this.body.hitMeshes = this.body.hitMeshes.filter((m) => m !== bag); }

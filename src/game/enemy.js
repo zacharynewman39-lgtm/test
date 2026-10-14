@@ -21,7 +21,8 @@ export class Enemy extends Actor {
   constructor(game, spawn) {
     const armed = spawn.type !== 'playdead';
     const look = { shirt: pick(CLOTHES), pants: pick(CLOTHES), skin: pick(SKINS), mask: true, gun: armed, vest: armed && Math.random() < 0.6 };
-    const body = spawn.kit ? new KitBody(spawn.kit, look) : new Body(look);
+    // the anatomical model goes in bare-faced in its own clothes: you see his face
+    const body = spawn.kit ? new KitBody(spawn.kit, { gun: armed }) : new Body(look);
     super(game, body, spawn.x, spawn.z, spawn.h);
     this.type = spawn.type;
     this.state = { playdead: 'playdead', ambush: 'ambush', patrol: 'patrol' }[spawn.type] || 'idle';
@@ -185,7 +186,7 @@ export class Enemy extends Actor {
     const g = this.game;
     this.repathT -= dt;
     if (!this.path || this.repathT <= 0 || !this.pathTarget || this.pathTarget.distanceTo(target) > 0.8) {
-      this.path = g.level.findPath(this.pos, target, cost);
+      this.path = g.level.findPath(this.pos, target, cost, true);
       this.pathI = 0;
       this.pathTarget = target.clone();
       this.repathT = repath;
@@ -527,7 +528,7 @@ export class Enemy extends Actor {
   pickFleeSpot() {
     const P = this.game.player;
     let best = null, bd = -1;
-    const rooms = Object.keys(this.game.level.cellsByRoom);
+    const rooms = Object.keys(this.game.level.cellsByRoom).filter((r) => r !== 'o');
     for (let i = 0; i < 16; i++) {
       const c = this.game.level.randomCellIn(rooms[Math.floor(Math.random() * rooms.length)]);
       const d = c.distanceTo(P.pos);

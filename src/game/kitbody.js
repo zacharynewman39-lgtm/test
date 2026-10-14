@@ -162,6 +162,13 @@ export class KitBody {
       this.points[n].copy(p).sub(o).multiplyScalar(this.scale).add(o);
     }
     this.kit.ragdoll.applyPoints(this.points);
+    this.hairLod();
+  }
+
+  // hair is expensive: only draw it on people near the camera
+  hairLod() {
+    const h = this.kit.npc.hair, cam = window.__game?.camera;
+    if (h?.userData.has && cam) h.visible = cam.position.distanceTo(this.kit.root.position) < 12;
   }
 
   // ------------------------------------------------------------- queries

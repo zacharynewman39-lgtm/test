@@ -462,10 +462,22 @@ export function buildLevel(scene, renderer) {
   level.roomAt = (x, z) => room(Math.floor(x), Math.floor(z));
   level.cellCenter = (x, z) => new THREE.Vector3(x + 0.5, 0, z + 0.5);
 
-  level.findPath = (from, to, cost = null) => {
+  // inside: never leave the house (suspects); a target outside snaps to the nearest room cell
+  level.findPath = (from, to, cost = null, inside = false) => {
     const sx = Math.floor(from.x), sz = Math.floor(from.z);
     let tx = Math.floor(to.x), tz = Math.floor(to.z);
     if (!inGrid(sx, sz)) return null;
+    if (inside && room(tx, tz) === 'o') {
+      let best = null, bd = 1e9;
+      for (let z = 0; z < H; z++) for (let x = 0; x < W; x++) {
+        if (room(x, z) === 'o' || !walkable(x, z)) continue;
+        const d = (x - tx) ** 2 + (z - tz) ** 2;
+        if (d < bd) { bd = d; best = [x, z]; }
+      }
+      if (!best) return null;
+      [tx, tz] = best;
+      to = level.cellCenter(tx, tz);
+    }
     if (!walkable(tx, tz)) { // nearest walkable neighbour
       let best = null, bd = 1e9;
       for (let dz = -2; dz <= 2; dz++) for (let dx = -2; dx <= 2; dx++) {
@@ -504,6 +516,7 @@ export function buildLevel(scene, renderer) {
         if (dx && dz) {
           if (!(passable(x, z, nx, z) && passable(nx, z, nx, nz) && passable(x, z, x, nz) && passable(x, nz, nx, nz))) continue;
         } else if (!passable(x, z, nx, nz)) continue;
+        if (inside && room(nx, nz) === 'o' && room(x, z) !== 'o') continue;
         const nk = key(nx, nz);
         const ng = g.get(k) + (dx && dz ? 1.414 : 1) + (cost ? cost(nx, nz) : 0);
         if (ng < (g.get(nk) ?? 1e9)) {

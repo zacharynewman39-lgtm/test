@@ -79,7 +79,7 @@ async function spawnActors(progress) {
   const all = [...SPAWNS.enemies, ...SPAWNS.hostages];
   let kits = [];
   try {
-    const world = createGoreWorld({ scene, renderer, baseUrl: NPC_BASE, hair: false, anatomyParts: window.__NPC_PARTS || null });
+    const world = createGoreWorld({ scene, renderer, baseUrl: NPC_BASE, hair: true, anatomyParts: window.__NPC_PARTS || null });
     for (const [i, s] of all.entries()) {
       kits.push(await world.spawnNPC({ position: new THREE.Vector3(s.x, 0, s.z), rotationY: s.h }));
       progress((i + 1) / all.length);
@@ -92,7 +92,8 @@ async function spawnActors(progress) {
     };
     game.goreWorld = world;
   } catch (e) {
-    console.warn('Anatomical NPC failed to load; using placeholder bodies.', e);
+    console.error('Anatomical NPC failed to load; using placeholder bodies.', e);
+    game.loadError = String(e && e.message || e);
     kits = [];
   }
   SPAWNS.enemies.forEach((s, i) => game.enemies.push(new Enemy(game, { ...s, kit: kits[i] })));
@@ -436,6 +437,7 @@ function menu(loading = 0) {
       <kbd>WASD</kbd> move · <kbd>Q</kbd> sprint · <kbd>C</kbd> crouch · <kbd>LMB</kbd> fire · <kbd>Shift</kbd> aim<br>
       <kbd>R</kbd> reload · <kbd>1</kbd>/<kbd>2</kbd> rifle / shotgun · <kbd>F</kbd> flashlight<br>
       <kbd>E</kbd> open doors · hold <kbd>E</kbd> free hostages · <kbd>V</kbd> kick</p>
+    ${game.loadError ? `<p style="color:#e55">Your NPC model failed to load (${game.loadError}). Running with placeholder bodies.</p>` : ''}
     ${ready ? '<div class="go">CLICK TO BREACH</div>' : `<div class="go" style="animation:none">LOADING SUSPECTS · ${Math.round(loading * 100)}%</div>`}`, ready ? start : null);
 }
 function start() {
@@ -518,6 +520,18 @@ const gunPass = new RenderPass(game.weapons.scene, game.weapons.camera);
 gunPass.clear = false;
 gunPass.clearDepth = true;
 composer.addPass(gunPass);
+// Any NaN/Inf pixel (a degenerate normal somewhere) gets smeared by the bloom
+// into a big black block. Scrub them and cap HDR before bloom ever sees them.
+composer.addPass(new ShaderPass({
+  uniforms: { tDiffuse: { value: null } },
+  vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
+  fragmentShader: `uniform sampler2D tDiffuse; varying vec2 vUv;
+    void main(){
+      vec4 c = texture2D(tDiffuse, vUv);
+      if (any(isnan(c)) || any(isinf(c))) c = vec4(0.0, 0.0, 0.0, 1.0);
+      gl_FragColor = vec4(min(c.rgb, vec3(40.0)), 1.0);
+    }`,
+}));
 const bloom = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 0.45, 0.5, 0.92);
 composer.addPass(bloom);
 composer.addPass(new OutputPass());

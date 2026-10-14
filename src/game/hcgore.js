@@ -117,6 +117,7 @@ export class HighCalibreGore {
     this.game = game;
     this.dangles = [];
     this.gibs = [];
+    this.guts = [];
     this.shot = new Map(); // pellets per actor+segment within one trigger pull
     this.shotId = 0;
   }
@@ -144,14 +145,20 @@ export class HighCalibreGore {
       actor.mangled ||= {};
       const already = actor.mangled[limbKey];
       if (already && (highEnergy || pellets >= 3)) out.severed = this.sever(actor, LIMBS[seg.seg].brk + '.' + seg.side, dirW, limbKey);
-      else if (pellets >= 6 && weapon.energy < 1500) out.severed = this.sever(actor, LIMBS[seg.seg].brk + '.' + seg.side, dirW, limbKey);
-      else if (!already && ((highEnergy && res.boneHit) || pellets === 4)) { this.mangle(actor, seg, tr, res); out.mangled = true; }
+      else if (pellets === 3 && weapon.energy < 1500) out.severed = this.sever(actor, LIMBS[seg.seg].brk + '.' + seg.side, dirW, limbKey);
+      else if (highEnergy && res.boneHit && Math.random() < 0.5) out.severed = this.sever(actor, LIMBS[seg.seg].brk + '.' + seg.side, dirW, limbKey); // shot clean off
+      else if (!already && ((highEnergy && res.boneHit) || pellets === 2)) { this.mangle(actor, seg, tr, res); out.mangled = true; }
     } else if (seg.seg === 'neck' && highEnergy && res.boneHit) {
       actor.mangled ||= {};
       actor.mangled.neck = true;
     }
     if (res.exits && (highEnergy || pellets === 1) && !out.blowout && !out.severed) this.bloomExit(actor, tr, res, weapon, seg);
     if (pellets === 6 && (seg.seg === 'chest' || seg.seg === 'abdomen')) this.crater(actor, tr, res, seg);
+    // belly opened: the bowel comes out
+    if ((seg.seg === 'abdomen' || seg.seg === 'pelvis') && !actor.gutted && ((highEnergy && res.exits) || pellets === 4)) {
+      actor.gutted = true;
+      this.spillGuts(actor, tr, res, pellets >= 4 ? 'front' : 'exit');
+    }
     return out;
   }
 
@@ -183,6 +190,19 @@ export class HighCalibreGore {
     const blood = kit.world.blood;
     blood.chunks(res.exitWorld, tr.rayWorld.direction, 3 + energy / 500, Math.round(3 + energy / 300), 1);
     if (res.boneHit) blood.chunks(res.exitWorld, tr.rayWorld.direction, 4, 6, 2);
+    // real tissue torn out of the exit: muscle, organ, and bone if it hit one
+    this.eject(actor, tr.M, res.endBind, tr.rayWorld.direction, energy, res.boneHit ? ['muscle', 'organs', 'skeleton'] : ['muscle', 'organs']);
+  }
+
+  eject(actor, M, centreBind, dirW, energy, layers, radius = 0.035) {
+    const g = this.game;
+    for (const layer of layers) {
+      const piece = extractPiece(actor.kit, layer, null, centreBind, radius * (layer === 'skeleton' ? 0.8 : 1), M, 1500);
+      if (!piece) continue;
+      g.scene.add(piece);
+      const v = dirW.clone().multiplyScalar(rnd(2, 4) + energy / 1200).add(new THREE.Vector3(rnd(-0.8, 0.8), rnd(0.3, 1.5), rnd(-0.8, 0.8)));
+      g.gore.addChunk(piece, v, new THREE.Vector3(rnd(-12, 12), rnd(-12, 12), rnd(-12, 12)), { r: 0.025, bleed: layer === 'skeleton' ? 0.3 : 1.5 });
+    }
   }
 
   // Shotgun point blank into the torso: a ragged open crater.
@@ -204,6 +224,7 @@ export class HighCalibreGore {
   // ------------------------------------------------------------- heads
   headBlowout(actor, tr, res, weapon, pellets) {
     const kit = actor.kit, g = this.game;
+    kit.seize = 1; // decerebrate convulsions as he goes down
     const head = kit.npc.bone('head');
     const center = head.userData.restHead.clone().add(new THREE.Vector3(0, 0.035, 0.022));
     const pEnd = res.exits ? res.endBind : res.entryBind.clone().addScaledVector(res.dirBind, 0.12);
@@ -227,11 +248,17 @@ export class HighCalibreGore {
       case 'top': R([0, 0.07, 0], [0, 0.2, -0.02], 0.055, 0.08); break; // skull cap gone
       case 'back': R([0, 0.02, -0.06], [0, 0.0, -0.18], 0.05, 0.08); break;
       case 'jaw': R([-0.06, -0.075, 0.08], [0.06, -0.075, 0.08], 0.038, 0.038); R([0, -0.09, 0.04], [0, -0.12, 0.14], 0.03, 0.05); break; // lower jaw blown away
-      case 'face': R([-0.045, 0.0, 0.1], [0.045, 0.0, 0.1], 0.035, 0.035); R([0, -0.03, 0.08], [0, -0.02, 0.18], 0.03, 0.06); break;
+      case 'face': // the face comes off: brow to chin, cheek to cheek
+        for (const y of [0.05, 0.0, -0.05, -0.09]) R([-0.06, y, 0.11], [0.06, y, 0.11], 0.034, 0.034);
+        R([0, -0.02, 0.05], [0, -0.02, 0.2], 0.04, 0.08);
+        kit.npc.morph('jawOpen', 1);
+        break;
       default: R([0, 0.03, 0], [Math.sign(out.x) * 0.16, 0.03, 0], 0.035, 0.07); break;
     }
     this.refresh(kit);
     if (region === 'jaw') kit.npc.morph('jawOpen', 1);
+    // the lower jaw tears away and falls
+    if ((region === 'jaw' || region === 'face') && Math.random() < 0.7) this.sever(actor, 'jaw', res.dirBind.clone().transformDirection(kit.boneMatrix(head, new THREE.Matrix4())).add(new THREE.Vector3(0, -0.6, 0)).normalize(), 'jaw');
 
     // skull plates and scalp peeled out of the crater, hanging where gravity takes them
     const exitW = kit.boneMatrix(head, new THREE.Matrix4());
@@ -240,7 +267,11 @@ export class HighCalibreGore {
     this.flower(actor, head, exitWorld, outW, { petals: 9, r0: 0.05 * big, len: 0.06, width: 0.04, curl: 1.4, jag: 0.8 }, 0xb88a72, 0x6a0a0a, true);
     this.flower(actor, head, exitWorld.clone().addScaledVector(outW, -0.012), outW, { petals: 6, r0: 0.04 * big, len: 0.035, width: 0.03, curl: 0.9, jag: 0.9 }, 0xe2d6c2, 0xc9a090);
 
-    // what comes out
+    // what comes out: his own brain and skull, in pieces
+    const HM = kit.boneMatrix(head, new THREE.Matrix4());
+    const exitB = center.clone().addScaledVector(out, 0.08);
+    this.eject(actor, HM, exitB, outW, 2500, ['cns', 'skeleton', 'muscle'], 0.05);
+    this.eject(actor, HM, center.clone().addScaledVector(out, 0.04), outW, 1800, ['cns'], 0.04);
     const blood = kit.world.blood;
     blood.chunks(exitWorld, outW, 6, 26, 1); // brain
     blood.chunks(exitWorld, outW, 6, 14, 2); // bone
@@ -379,14 +410,14 @@ export class HighCalibreGore {
     gib.traverse((o) => {
       if (o.isSkinnedMesh) {
         if (o.material.userData.goreKind !== undefined) o.material = gibMaterial(o.material, gu);
-        else if (!cutNames.has('head')) strip.push(o); // eyes/teeth only travel with a head
+        else if (!cutNames.has('head') && !(cutNames.has('jaw') && /lower-teeth|tongue/.test(o.name))) strip.push(o); // eyes/teeth only travel with what holds them
       } else if (o.isMesh && !underCut(o, cutNames)) strip.push(o);
     });
     for (const o of strip) o.removeFromParent();
     // and the body loses everything that was riding on the cut part
     kit.root.traverse((o) => {
       if (o.isMesh && !o.isSkinnedMesh && underCut(o, cutNames)) o.visible = false;
-      if (o.isSkinnedMesh && o.material.userData.goreKind === undefined && cutNames.has('head')) o.visible = false;
+      if (o.isSkinnedMesh && o.material.userData.goreKind === undefined && (cutNames.has('head') || (cutNames.has('jaw') && /lower-teeth|tongue/.test(o.name)))) o.visible = false;
     });
     for (let i = 0; i < kit.skeleton.bones.length; i++) if (cutBones.has(kit.skeleton.bones[i])) kit.uniforms.uCut.value[i] = 1;
 
@@ -406,6 +437,7 @@ export class HighCalibreGore {
     const ph = kit.phys;
     const stumpAnchor = kit.addAnchor(cutBone.parent.isBone ? cutBone.parent : cutBone, a, axis);
     if (boneName.startsWith('neck')) { ph.brain = 0; ph.consciousness = 0; ph.die('decapitated'); }
+    else if (boneName === 'jaw') { ph.pain = 1; ph.airway = 0.4; }
     else {
       const limb = /leg/.test(boneName) ? 'leg' : 'arm';
       const side = boneName.endsWith('L') ? 'L' : 'R';
@@ -455,8 +487,98 @@ export class HighCalibreGore {
     return mesh;
   }
 
+  // ------------------------------------------------------------ guts
+  // Loops of bowel pushed out through an abdominal wound, hanging and swinging
+  // from the body. Verlet chains rendered as wet tubes.
+  spillGuts(actor, tr, res, side) {
+    const kit = actor.kit;
+    const p = side === 'exit' && res.exits ? res.endBind : res.entryBind;
+    const n = side === 'exit' && res.exits ? res.dirBind.clone() : res.dirBind.clone().negate();
+    // tear the belly open around the spill
+    for (let i = 0; i < 4; i++) {
+      const off = new THREE.Vector3(rnd(-1, 1), rnd(-0.6, 0.6), rnd(-1, 1)).multiplyScalar(0.03);
+      this.addTract(kit, p.clone().addScaledVector(n, -0.08).add(off), p.clone().addScaledVector(n, 0.05).add(off), 0.03, 0.05);
+    }
+    this.refresh(kit);
+    const bone = tr.bone;
+    const M = kit.boneMatrix(bone, new THREE.Matrix4());
+    const anchorW = p.clone().applyMatrix4(M);
+    const nW = n.clone().transformDirection(M);
+    // the actual loops of jejunum/ileum/colon nearest the hole come out
+    const parts = kit.anat.parts.filter((pt) => (pt.tissue === 'intestine' || pt.tissue === 'colon') && pt.volume_ml > 5)
+      .map((pt) => ({ pt, d: new THREE.Vector3().fromArray(pt.centre).distanceTo(p) }))
+      .sort((x, y) => x.d - y.d).slice(0, 4);
+    const tether = gutMaterial();
+    for (const { pt } of parts) {
+      const piece = extractPiece(kit, 'organs', new Set([pt.id]), new THREE.Vector3().fromArray(pt.centre), 0.4, M);
+      if (!piece) continue;
+      this.game.scene.add(piece);
+      const anchor = new THREE.Object3D();
+      bone.add(anchor);
+      anchor.position.copy(bone.worldToLocal(anchorW.clone().add(new THREE.Vector3(rnd(-0.03, 0.03), rnd(-0.03, 0.03), rnd(-0.03, 0.03)))));
+      const N = 5 + Math.floor(Math.random() * 4);
+      const pts = [], prev = [];
+      for (let i = 0; i < N; i++) {
+        const q = anchorW.clone().addScaledVector(nW, 0.03 * i);
+        pts.push(q); prev.push(q.clone().addScaledVector(nW, -0.015)); // pushed out under pressure
+      }
+      const mesh = new THREE.Mesh(new THREE.BufferGeometry(), tether);
+      mesh.castShadow = true;
+      mesh.frustumCulled = false;
+      this.game.scene.add(mesh);
+      this.guts.push({ actor, anchor, pts, prev, seg: 0.05, mesh, r: rnd(0.008, 0.012), drip: 0, piece, spin: new THREE.Vector3(rnd(-1, 1), rnd(-1, 1), rnd(-1, 1)) });
+    }
+    const blood = kit.world.blood;
+    blood.spray(anchorW, nW, 2.5, 80, { spread: 0.5, dropMl: 0.06 });
+    blood.chunks(anchorW, nW, 2, 8, 1);
+    kit.phys.addBleed({ part: 'eviscerated', rate: 8, external: 1, anchor: kit.addAnchor(bone, p, n), pulsatile: false });
+    kit.phys.pain = 1;
+    kit.screamT = 1.5;
+    this.game.audio.play('gib', { pos: anchorW, volume: 1 });
+    this.game.stats.dismember++;
+  }
+
+  updateGuts(dt) {
+    const level = this.game.level;
+    const g = new THREE.Vector3(0, -9.81 * dt * dt, 0);
+    for (const gt of this.guts) {
+      const { pts, prev } = gt;
+      gt.anchor.getWorldPosition(pts[0]);
+      prev[0].copy(pts[0]);
+      for (let i = 1; i < pts.length; i++) {
+        const v = pts[i].clone().sub(prev[i]).multiplyScalar(0.985);
+        prev[i].copy(pts[i]);
+        pts[i].add(v).add(g);
+      }
+      for (let it = 0; it < 8; it++) {
+        for (let i = 1; i < pts.length; i++) {
+          const a = pts[i - 1], b = pts[i];
+          const d = b.clone().sub(a);
+          const L = d.length() || 1e-6;
+          const corr = d.multiplyScalar((L - gt.seg) / L);
+          if (i === 1) b.sub(corr); else { a.addScaledVector(corr, 0.5); b.addScaledVector(corr, -0.5); }
+        }
+        for (let i = 1; i < pts.length; i++) {
+          if (pts[i].y < gt.r) { pts[i].y = gt.r; prev[i].x += (pts[i].x - prev[i].x) * 0.5; prev[i].z += (pts[i].z - prev[i].z) * 0.5; }
+          level.collide3D(pts[i], gt.r);
+        }
+      }
+      if (gt.piece) {
+        gt.piece.position.copy(pts[pts.length - 1]);
+        gt.piece.rotation.x += gt.spin.x * dt; gt.piece.rotation.z += gt.spin.z * dt;
+        gt.spin.multiplyScalar(0.995);
+      }
+      const curve = new THREE.CatmullRomCurve3(pts);
+      gt.mesh.geometry.dispose();
+      gt.mesh.geometry = new THREE.TubeGeometry(curve, pts.length * 3, gt.r, 7, false);
+      gt.drip -= dt;
+      if (gt.drip <= 0) { gt.drip = 0.3 + Math.random() * 0.5; gt.actor.kit.world.blood.drip(pts[pts.length - 1], 0.6); }
+    }
+  }
+
   // ------------------------------------------------------------- update
   update(dt) {
+    this.updateGuts(dt);
     const level = this.game.level;
     for (const gb of this.gibs) {
       if (gb.rest) continue;
@@ -475,6 +597,77 @@ export class HighCalibreGore {
       }
     }
   }
+}
+
+// --------------------------------------------------- real anatomy pieces
+// Cut triangles out of the npc's own anatomy (BodyParts3D) meshes: every
+// organ, bone or muscle that comes out of a wound is the real thing.
+const pieceMats = new Map();
+function pieceMaterial(layer) {
+  if (pieceMats.has(layer)) return pieceMats.get(layer);
+  const bone = layer === 'skeleton';
+  const m = new THREE.MeshPhysicalMaterial({
+    vertexColors: true, roughness: bone ? 0.45 : 0.16, clearcoat: bone ? 0.2 : 0.9, clearcoatRoughness: 0.08,
+    sheen: bone ? 0 : 0.4, sheenColor: new THREE.Color(0.8, 0.25, 0.25), side: THREE.DoubleSide,
+  });
+  // smeared in blood
+  m.onBeforeCompile = (sh) => {
+    sh.fragmentShader = sh.fragmentShader.replace('#include <color_fragment>', `#include <color_fragment>
+      float bl = 0.5 + 0.5 * sin(vViewPosition.x * 90.0 + vViewPosition.y * 70.0);
+      diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.22, 0.01, 0.01), ${bone ? '0.35' : '0.25'} * bl);`);
+  };
+  m.customProgramCacheKey = () => 'piece-' + (bone ? 'b' : 't');
+  pieceMats.set(layer, m);
+  return m;
+}
+
+// Triangles of `layer` belonging to `pids` (or any part if null) whose centre is
+// within `radius` of `centre` (bind space). Returns a world-space mesh or null.
+export function extractPiece(kit, layer, pids, centre, radius, M, maxTris = 6000) {
+  const mesh = kit.anat.layers[layer];
+  if (!mesh) return null;
+  const g = mesh.geometry, idx = g.index, pos = g.getAttribute('position'), col = g.getAttribute('color'), part = g.getAttribute('_part');
+  const r2 = radius * radius;
+  const P = [], C = [];
+  const a = new THREE.Vector3(), b = new THREE.Vector3(), c = new THREE.Vector3(), m = new THREE.Vector3();
+  for (let t = 0; t < idx.count && P.length / 9 < maxTris; t += 3) {
+    const i0 = idx.getX(t), i1 = idx.getX(t + 1), i2 = idx.getX(t + 2);
+    if (pids && !pids.has(part.getX(i0))) continue;
+    a.fromBufferAttribute(pos, i0); b.fromBufferAttribute(pos, i1); c.fromBufferAttribute(pos, i2);
+    m.copy(a).add(b).add(c).multiplyScalar(1 / 3);
+    if (m.distanceToSquared(centre) > r2) continue;
+    for (const [v, i] of [[a, i0], [b, i1], [c, i2]]) {
+      P.push(v.x, v.y, v.z);
+      if (col) C.push(col.getX(i), col.getY(i), col.getZ(i)); else C.push(0.5, 0.1, 0.1);
+    }
+  }
+  if (P.length < 27) return null;
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(P, 3));
+  geo.setAttribute('color', new THREE.Float32BufferAttribute(C, 3));
+  geo.applyMatrix4(M);
+  geo.computeBoundingBox();
+  const ctr = geo.boundingBox.getCenter(new THREE.Vector3());
+  geo.translate(-ctr.x, -ctr.y, -ctr.z);
+  geo.computeVertexNormals();
+  geo.computeBoundingSphere();
+  const out = new THREE.Mesh(geo, pieceMaterial(layer));
+  out.position.copy(ctr);
+  out.castShadow = true;
+  return out;
+}
+
+let gutMat = null;
+function gutMaterial() {
+  if (gutMat) return gutMat;
+  gutMat = new THREE.MeshPhysicalMaterial({ color: 0xb06866, roughness: 0.18, clearcoat: 0.8, clearcoatRoughness: 0.1, sheen: 0.4, sheenColor: new THREE.Color(0.8, 0.3, 0.3) });
+  gutMat.onBeforeCompile = (sh) => {
+    sh.fragmentShader = sh.fragmentShader.replace('#include <color_fragment>', `#include <color_fragment>
+      float s = sin(vViewPosition.x * 180.0) * sin(vViewPosition.y * 160.0);
+      diffuseColor.rgb *= 0.8 + 0.25 * s;
+      diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.35, 0.03, 0.03), smoothstep(0.6, 1.0, s) * 0.6);`);
+  };
+  return gutMat;
 }
 
 function underCut(o, cutNames) {

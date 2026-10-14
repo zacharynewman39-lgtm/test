@@ -59,10 +59,23 @@ function loadShared(BASE, withHair) {
   if (!shared.has(key)) {
     shared.set(key, Promise.all([
       new GLTFLoader().loadAsync(BASE + (globalThis.__NPC_GLB || 'npc.glb')),
-      withHair ? loadHairGeometry(BASE + 'hair.bin') : null,
+      withHair ? loadHairGeometry(BASE + (globalThis.__NPC_HAIR || 'hair.bin')).then(thinHair) : null,
     ]));
   }
   return shared.get(key);
+}
+
+// Games with many NPCs: keep every third strand (1.44M -> 0.48M triangles each).
+function thinHair(g) {
+  const keep = globalThis.__NPC_HAIR_KEEP || 3;
+  if (keep <= 1) return g;
+  const idx = g.index.array, per = 6 * 8; // (K-1) segments * 6 indices per strand, K = 9
+  const strands = idx.length / per;
+  const out = new Uint32Array(Math.ceil(strands / keep) * per);
+  let o = 0;
+  for (let s = 0; s < strands; s += keep) { out.set(idx.subarray(s * per, s * per + per), o); o += per; }
+  g.setIndex(new THREE.BufferAttribute(out.subarray(0, o), 1));
+  return g;
 }
 
 export async function loadNPC(renderer, BASE, { hair: withHair = true } = {}) {
@@ -89,10 +102,11 @@ export async function loadNPC(renderer, BASE, { hair: withHair = true } = {}) {
 
   const head = bone('head');
   const hair = new THREE.Mesh(hairGeo || new THREE.BufferGeometry(), mats.hair);
-  hair.castShadow = true;
+  hair.castShadow = false;
   hair.receiveShadow = true;
   hair.frustumCulled = false;
   hair.visible = !!hairGeo;
+  hair.userData.has = !!hairGeo;
   head.add(hair);
   // hair positions are relative to the head bone's rest position
   root.updateWorldMatrix(true, true);
@@ -204,8 +218,10 @@ export async function loadNPC(renderer, BASE, { hair: withHair = true } = {}) {
   }
 
   const healthy = { rr: 14, consciousness: 1, pain: 0, alive: true, limbs: null };
-  function update(dt, t, camPos, playerPos, cond = healthy) {
-    pose(t, cond);
+  // poseBody = false: something else (a game rig) already posed the body this
+  // frame; only run the head/eye tracking, blinks and facial expression.
+  function update(dt, t, camPos, playerPos, cond = healthy, poseBody = true) {
+    if (poseBody) pose(t, cond);
     root.updateWorldMatrix(true, true);
 
     // ---------------------------------------------------- attention / look
@@ -274,7 +290,7 @@ export async function loadNPC(renderer, BASE, { hair: withHair = true } = {}) {
       morph('squint', cond.pain * 0.6);
       morph('mouthPress', cond.pain * 0.5);
       morph('nostrils', Math.max(0, Math.sin(breathPhase)) * (0.15 + cond.pain * 0.6));
-      morph('jawOpen', Math.max(0, Math.sin(breathPhase)) * 0.25 * Math.max(0, Math.min(1, (cond.rr - 18) / 15)) + (1 - cond.consciousness) * 0.2);
+      morph('jawOpen', Math.max(cond.scream || 0, Math.max(0, Math.sin(breathPhase)) * 0.25 * Math.max(0, Math.min(1, (cond.rr - 18) / 15)) + (1 - cond.consciousness) * 0.2));
       morph('smile', 0); morph('browsUp', 0);
       return;
     }

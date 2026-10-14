@@ -125,7 +125,7 @@ export class Squad {
     const myD = Math.hypot(e.pos.x - P.x, e.pos.z - P.z);
     let best = null, bestScore = -1e9;
     for (let z = ez - radius; z <= ez + radius; z++) for (let x = ex - radius; x <= ex + radius; x++) {
-      if (!L.walkable(x, z)) continue;
+      if (!L.walkable(x, z) || L.room(x, z) === 'o') continue;
       const k = x + z * this.W;
       if (this.visLow[k]) continue; // he'd be seen even crouched
       const c = L.cellCenter(x, z);
@@ -158,7 +158,7 @@ export class Squad {
     for (const o of others) avg.add(new THREE.Vector2(o.pos.x - P.x, o.pos.z - P.z).normalize());
     let best = null, bestScore = -1e9;
     for (let z = 0; z < this.H; z++) for (let x = 0; x < this.W; x++) {
-      if (!L.walkable(x, z) || !this.visHigh[x + z * this.W]) continue;
+      if (!L.walkable(x, z) || L.room(x, z) === 'o' || !this.visHigh[x + z * this.W]) continue;
       const c = L.cellCenter(x, z);
       const v = new THREE.Vector2(c.x - P.x, c.z - P.z);
       const d = v.length();

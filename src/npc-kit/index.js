@@ -245,7 +245,36 @@ class GoreNPC {
       if (entrySeg === frameSeg || (TORSO.has(entrySeg) && TORSO.has(frameSeg))) return tr;
       fallback ||= tr;
     }
-    return fallback;
+    if (fallback) return fallback;
+    // The ray went through the body volume but no frame's bind-space skin test
+    // caught it (a posed limb far from its rest pose). Never let that be a miss:
+    // snap to the closest skin point to where the ray crosses the nearest capsule.
+    for (const h of hits) {
+      if (skip.has(h.frame) || this.cutSet?.has(h.frame)) continue;
+      const bone = this.npc.bone(h.frame);
+      const M = this.boneMatrix(bone);
+      const inv = M.clone().invert();
+      const pW = ray.at(h.t + 0.02, new THREE.Vector3());
+      const pB = pW.clone().applyMatrix4(inv);
+      const near = this.skinGeo.boundsTree.closestPointToPoint(pB);
+      if (!near) continue;
+      const rb = ray.clone().applyMatrix4(inv);
+      rb.direction.normalize();
+      // restart the bind ray just outside the skin so entry/exit are a real crossing
+      const startB = near.point.clone().addScaledVector(rb.direction, -0.05);
+      const rb2 = new THREE.Ray(startB, rb.direction.clone());
+      const skin = raycastAll(this.skinGeo, rb2, 2);
+      let entry = skin.find((s) => s.face.normal.dot(rb2.direction) < 0);
+      if (!entry) {
+        const idx = this.skinGeo.index;
+        const a = idx.getX(near.faceIndex * 3);
+        entry = { point: near.point.clone(), distance: 0.05, face: { a, normal: rb2.direction.clone().negate() }, faceIndex: near.faceIndex };
+      }
+      const exit = skin.find((s) => s.distance > entry.distance + 0.003);
+      const entryWorld = entry.point.clone().applyMatrix4(M);
+      return { npc: this, bone, M, inv, rb: rb2, entry, exit, distance: entryWorld.distanceTo(origin), rayWorld: ray, entrySeg: this.vertSeg[entry.face.a] };
+    }
+    return null;
   }
 
   applyHit(tr, weapon, continued = false) {
@@ -379,12 +408,16 @@ class GoreNPC {
 
   update(dt, t, { camera, playerPos }) {
     const ph = this.phys.step(dt);
-    const cond = { rr: ph.rr, consciousness: ph.consciousness, pain: ph.pain, alive: ph.alive, limbs: ph.limbs };
+    this.screamT = Math.max(0, (this.screamT || 0) - dt * 1.4);
+    this.seize = Math.max(0, (this.seize || 0) - dt / 8);
+    const cond = { rr: ph.rr, consciousness: ph.consciousness, pain: Math.max(ph.pain, this.fear || 0), alive: ph.alive, limbs: ph.limbs, scream: this.screamT };
 
     if (this.wasAlive && !ph.alive) this.world.onDeath?.(this, ph.cause);
     this.wasAlive = ph.alive;
     if (this.driver && !this.ragdoll.active) {
       this.driver(dt, t, cond);
+      // the game moves the body; the face (eyes, blinks, pain, screams) is still his own
+      this.npc.update(dt, t, camera.position, playerPos, cond, false);
       this.root.updateWorldMatrix(true, true);
       this.lastJoints = this.captureJoints();
     } else if (!this.ragdoll.active && !ph.canStand) {
@@ -395,6 +428,7 @@ class GoreNPC {
     if (this.ragdoll.active) {
       this.deadFor += ph.alive ? 0 : dt;
       const agonal = ph.alive ? (1 - ph.consciousness) * 0.3 : Math.max(0, 1 - this.deadFor / 6) * 0.8;
+      this.ragdoll.seize = this.seize * (ph.alive || this.deadFor < 12 ? 1 : 0);
       this.ragdoll.step(dt, agonal);
       this.ragdoll.apply();
       if (!ph.alive || ph.consciousness < 0.2) this.npc.deadFace();

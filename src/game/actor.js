@@ -100,6 +100,8 @@ export class Actor {
     const ph = kit.phys;
     const before = { armR: ph.limbs.armR, canStand: ph.canStand, alive: ph.alive };
     const res = kit.applyHit(tr, weapon, continued);
+    if (ph.alive) kit.screamT = 1; // he screams
+    if (res.brainHit || ph.cord) kit.seize = Math.max(kit.seize || 0, res.brainHit ? 1 : 0.6);
     const ext = g.hcgore.onHit(this, tr, weapon, res);
     const dir = tr.rayWorld.direction.clone();
     if (res.exitWorld) g.gore.exitSplatter(res.exitWorld, dir, ext.seg.seg === 'head' ? 2 : 1 + res.remaining / 3000);

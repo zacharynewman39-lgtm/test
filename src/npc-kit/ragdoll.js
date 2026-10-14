@@ -40,6 +40,7 @@ const RESET_LOCAL = ['spine05', 'spine04', 'spine03', 'spine02', 'neck01', 'neck
   'clavicle.R', 'shoulder01.L', 'shoulder01.R', 'pelvis.L', 'pelvis.R'];
 
 const v = () => new THREE.Vector3();
+const SEIZE = new Set(['head', 'elbL', 'elbR', 'wriL', 'wriR', 'hanL', 'hanR', 'kneL', 'kneR', 'ankL', 'ankR', 'toeL', 'toeR']);
 
 export class Ragdoll {
   constructor(root, bone, groundHeight) {
@@ -120,6 +121,11 @@ export class Ragdoll {
         pp.copy(p);
         p.x += vx; p.y += vy - 9.81 * h * h; p.z += vz;
         if (agonal > 0 && Math.random() < agonal * h * 4) p.x += (Math.random() - 0.5) * 0.004, p.z += (Math.random() - 0.5) * 0.004;
+        // seizure: rhythmic clonic jerks through the limbs and head
+        if (this.seize > 0 && SEIZE.has(n)) {
+          const k = this.seize * (0.5 + 0.5 * Math.max(0, Math.sin(this.t * 38 + n.length))) * 0.006;
+          p.x += (Math.random() - 0.5) * k; p.y += Math.random() * k * 1.4; p.z += (Math.random() - 0.5) * k;
+        }
       }
       for (let it = 0; it < 10; it++) {
         for (const L of this.links) solveDist(this.p[L.a], this.p[L.b], this.inv[L.a], this.inv[L.b], L.d, L.k);
