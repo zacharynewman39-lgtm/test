@@ -228,6 +228,7 @@ const dom = renderer.domElement;
 const I = game.input;
 window.addEventListener('keydown', (e) => {
   I.keys[e.code] = true;
+  if (e.code === 'Escape' && noLock && game.state === 'play') pause();
   if (game.state !== 'play') return;
   const W = game.weapons, P = game.player;
   if (e.code === 'KeyR') W.reload();
@@ -252,13 +253,17 @@ window.addEventListener('wheel', (e) => {
   if (game.state === 'play') game.weapons.switchTo(game.weapons.current === 'rifle' ? 'shotgun' : 'rifle');
 }, { passive: true });
 window.addEventListener('mousemove', (e) => {
-  if (game.state !== 'play' || document.pointerLockElement !== dom) return;
+  // without pointer lock (some embedded frames refuse it) the free mouse still steers
+  if (game.state !== 'play' || (document.pointerLockElement !== dom && !noLock)) return;
   const sens = 0.0022 * (1 - game.weapons.ads * 0.35);
   game.player.look(e.movementX, e.movementY, sens);
   game.weapons.onMouse(e.movementX, e.movementY);
 });
+let noLock = false;
+document.addEventListener('pointerlockerror', () => { noLock = true; });
 document.addEventListener('pointerlockchange', () => {
-  if (document.pointerLockElement !== dom && game.state === 'play') pause();
+  if (document.pointerLockElement === dom) noLock = false;
+  else if (game.state === 'play' && !noLock) pause();
 });
 
 function frontOf(maxDist, cos = 0.6) {
@@ -337,7 +342,11 @@ function start() {
   game.audio.start();
   game.hud.hide();
   game.state = 'play';
-  dom.requestPointerLock?.();
+  try {
+    const r = dom.requestPointerLock?.();
+    if (r?.catch) r.catch(() => { noLock = true; });
+    else if (!dom.requestPointerLock) noLock = true;
+  } catch { noLock = true; }
 }
 function pause() {
   game.state = 'paused';
