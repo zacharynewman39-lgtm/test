@@ -8,6 +8,8 @@ import { Gore } from './gore.js';
 import { Audio } from './audio.js';
 import { HUD } from './hud.js';
 import { Squad } from './squad.js';
+import { HighCalibreGore } from './hcgore.js';
+import { createGoreWorld } from '../npc-kit/index.js';
 import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
@@ -49,9 +51,8 @@ game.gore = new Gore(scene, game.level);
 game.player = new FPSPlayer(game, camera, SPAWNS.player);
 game.weapons = new Weapons(game, camera);
 game.exit = new THREE.Vector3(SPAWNS.exit.x, 0, SPAWNS.exit.z);
-for (const s of SPAWNS.enemies) game.enemies.push(new Enemy(game, s));
-for (const s of SPAWNS.hostages) game.hostages.push(new Hostage(game, s));
-game.squad = new Squad(game);
+game.hcgore = new HighCalibreGore(game);
+game.goreWorld = null;
 
 // ------------------------------------------------------------------ helpers
 const ray = new THREE.Raycaster();
@@ -70,54 +71,115 @@ game.suspectsLeft = () => game.enemies.filter((e) => !e.dead).length;
 game.roomName = () => ROOM_NAMES[game.level.roomAt(game.player.pos.x, game.player.pos.z)] || '';
 
 const actorOf = new Map();
-for (const a of [...game.enemies, ...game.hostages]) actorOf.set(a.body, a);
+
+// Load the anatomical NPC once and give every suspect and hostage their own
+// instance. If it can't load, everyone falls back to the primitive body.
+const NPC_BASE = window.__NPC_BASE ?? (import.meta.env.BASE_URL + 'npc/');
+async function spawnActors(progress) {
+  const all = [...SPAWNS.enemies, ...SPAWNS.hostages];
+  let kits = [];
+  try {
+    const world = createGoreWorld({ scene, renderer, baseUrl: NPC_BASE, hair: false, anatomyParts: window.__NPC_PARTS || null });
+    for (const [i, s] of all.entries()) {
+      kits.push(await world.spawnNPC({ position: new THREE.Vector3(s.x, 0, s.z), rotationY: s.h }));
+      progress((i + 1) / all.length);
+    }
+    for (const k of kits) k.ragdoll.collide = (p, r) => game.level.collide3D(p, r);
+    world.blood.solid = (x, y, z) => game.level.solidAt(x, y, z);
+    world.blood.onWall = (p, n, ml) => {
+      if (ml > 0.15 || Math.random() < 0.3) game.gore.splat(p, n, Math.min(0.5, 0.05 + Math.cbrt(ml) * 0.25));
+      if (ml > 1.5 && p.y > 0.5 && Math.random() < 0.2) game.gore.wallRun(p, n, 0.3);
+    };
+    game.goreWorld = world;
+  } catch (e) {
+    console.warn('Anatomical NPC failed to load; using placeholder bodies.', e);
+    kits = [];
+  }
+  SPAWNS.enemies.forEach((s, i) => game.enemies.push(new Enemy(game, { ...s, kit: kits[i] })));
+  SPAWNS.hostages.forEach((s, i) => game.hostages.push(new Hostage(game, { ...s, kit: kits[SPAWNS.enemies.length + i] })));
+  for (const a of [...game.enemies, ...game.hostages]) actorOf.set(a.body, a);
+  game.squad = new Squad(game);
+}
+
 const targets = () => {
   const list = [...game.level.occluders];
   for (const a of actorOf.values()) if (a.root.visible) list.push(...a.body.hitMeshes);
   return list;
 };
 
-// Player bullets. dirs: one per pellet. Rifle rounds punch through bodies
-// and doors and keep going with less energy.
+// Player bullets. dirs: one per pellet. Against the anatomical NPCs each
+// round is traced tissue by tissue and keeps going with whatever energy it has
+// left; it also punches through doors.
 const _seg = new THREE.Vector3();
+const KIT_ROUNDS = {
+  rifle: { energy: 3300, entryR: 0.0042, cavity: 0.05, push: 1.4, pellets: 1, spread: 0 },
+  shotgun: { energy: 520, entryR: 0.0048, cavity: 0.012, push: 0.45, pellets: 1, spread: 0 },
+};
 game.playerShot = (origin, dirs, def) => {
   const list = targets();
+  const kitActors = [...game.enemies, ...game.hostages].filter((a) => a.kit && a.kit.root.visible);
   let hitAny = false, killed = false;
   game.stats.shots++;
   game.player.firedT = 0;
+  game.hcgore.beginShot();
   for (const dir of dirs) {
-    ray.set(origin, dir);
-    ray.far = 80;
-    const hits = ray.intersectObjects(list, false);
+    let o = origin.clone();
+    let energy = KIT_ROUNDS[def.round].energy;
     let damage = def.damage, through = def.penetration ?? 0;
+    const skip = new Map();
     const struck = new Set();
     let end = origin.clone().addScaledVector(dir, 40);
-    for (const hit of hits) {
-      const n = hit.face ? hit.face.normal.clone().transformDirection(hit.object.matrixWorld) : dir.clone().negate();
-      if (n.dot(dir) > 0) n.negate();
-      const body = hit.object.userData.body;
-      if (body) {
-        const actor = actorOf.get(body);
-        if (struck.has(actor)) continue; // that's the same body's far side
-        struck.add(actor);
+    const travelled = () => o.distanceTo(origin);
+    for (let step = 0; step < 8; step++) {
+      ray.set(o, dir);
+      ray.far = 80;
+      const lh = ray.intersectObjects(list, false).find((h) => !struck.has(actorOf.get(h.object.userData.body)));
+      let best = null;
+      for (const a of kitActors) {
+        const tr = a.kit.trace(o, dir, skip.get(a) || new Set());
+        if (tr && (!best || tr.distance < best.tr.distance)) best = { a, tr };
+      }
+      if (best && (!lh || best.tr.distance < lh.distance)) {
+        const actor = best.a;
         const wasDead = actor.dead;
-        const falloff = def.pellets > 1 ? THREE.MathUtils.clamp(1.3 - hit.distance / 14, 0.25, 1.2) : 1;
-        actor.takeHit({ mesh: hit.object, point: hit.point, normal: n, dir, damage: damage * falloff, uv: hit.uv });
+        const res = actor.kitHit(best.tr, { ...KIT_ROUNDS[def.round], energy }, step > 0);
         if (!wasDead && actor.dead) killed = true;
         hitAny = true;
         if (actor instanceof Hostage && !wasDead) game.hud.warn('HOLD YOUR FIRE — HOSTAGE HIT', 2);
-        if (hit.distance < 2.5) game.hud.spatter(0.35);
-        damage *= 0.55;
-        if (through-- <= 0) { end = hit.point; break; }
-      } else {
-        const door = hit.object.userData.door;
-        if (!door) game.gore.bulletHole(hit.point, n);
-        else game.gore.dust(hit.point, n);
-        game.audio.play('impact', { pos: hit.point, volume: 0.6 });
-        if (door && through-- > 0) { damage *= 0.7; continue; }
-        end = hit.point;
-        break;
+        if (travelled() + best.tr.distance < 2.5) game.hud.spatter(0.35);
+        if (!res.exitWorld || res.remaining < 60) { end = best.tr.rayWorld.at(best.tr.distance, new THREE.Vector3()); break; }
+        energy = res.remaining;
+        if (!skip.has(actor)) skip.set(actor, new Set());
+        skip.get(actor).add(best.tr.bone.name);
+        o = res.exitWorld.clone().addScaledVector(dir, 0.003);
+        continue;
       }
+      if (!lh) break;
+      const n = lh.face ? lh.face.normal.clone().transformDirection(lh.object.matrixWorld) : dir.clone().negate();
+      if (n.dot(dir) > 0) n.negate();
+      const body = lh.object.userData.body;
+      if (body) { // placeholder body
+        const actor = actorOf.get(body);
+        struck.add(actor);
+        const wasDead = actor.dead;
+        const falloff = def.pellets > 1 ? THREE.MathUtils.clamp(1.3 - (travelled() + lh.distance) / 14, 0.25, 1.2) : 1;
+        actor.takeHit({ mesh: lh.object, point: lh.point, normal: n, dir, damage: damage * falloff, uv: lh.uv });
+        if (!wasDead && actor.dead) killed = true;
+        hitAny = true;
+        if (actor instanceof Hostage && !wasDead) game.hud.warn('HOLD YOUR FIRE — HOSTAGE HIT', 2);
+        if (lh.distance < 2.5) game.hud.spatter(0.35);
+        damage *= 0.55;
+        if (through-- <= 0) { end = lh.point; break; }
+        o = lh.point.clone().addScaledVector(dir, 0.01);
+        continue;
+      }
+      const door = lh.object.userData.door;
+      if (!door) game.gore.bulletHole(lh.point, n);
+      else game.gore.dust(lh.point, n);
+      game.audio.play('impact', { pos: lh.point, volume: 0.6 });
+      if (door && def.round === 'rifle' && energy > 800) { energy *= 0.6; damage *= 0.7; o = lh.point.clone().addScaledVector(dir, 0.08); continue; }
+      end = lh.point;
+      break;
     }
     // rounds cracking past a suspect pin him down
     for (const e of game.enemies) {
@@ -165,9 +227,14 @@ game.enemyShoot = (enemy, target, hostage, opts = {}) => {
   flashAt(muzzle, 1);
   game.squad.noise(enemy.pos, 10);
   if (hostage) {
-    const head = hostage.body.hitMeshes.find((m) => m.userData.part === 'head');
     const dir = target.clone().sub(muzzle).normalize();
-    if (head) hostage.takeHit({ mesh: head, point: target, normal: dir.clone().negate(), dir, damage: 80 });
+    if (hostage.kit) {
+      const tr = hostage.kit.trace(muzzle, dir);
+      if (tr) hostage.kitHit(tr, KIT_ROUNDS.rifle);
+    } else {
+      const head = hostage.body.hitMeshes.find((m) => m.userData.part === 'head');
+      if (head) hostage.takeHit({ mesh: head, point: target, normal: dir.clone().negate(), dir, damage: 80 });
+    }
     tracer(muzzle, target);
     return;
   }
@@ -358,7 +425,8 @@ function kick() {
 }
 
 // ------------------------------------------------------------------- states
-function menu() {
+function menu(loading = 0) {
+  const ready = loading >= 1;
   game.hud.show(`
     <h1>${TITLE}</h1>
     <h2>SOLO RAID · 2 HOSTAGES · UNKNOWN SUSPECTS</h2>
@@ -368,7 +436,7 @@ function menu() {
       <kbd>WASD</kbd> move · <kbd>Q</kbd> sprint · <kbd>C</kbd> crouch · <kbd>LMB</kbd> fire · <kbd>Shift</kbd> aim<br>
       <kbd>R</kbd> reload · <kbd>1</kbd>/<kbd>2</kbd> rifle / shotgun · <kbd>F</kbd> flashlight<br>
       <kbd>E</kbd> open doors · hold <kbd>E</kbd> free hostages · <kbd>V</kbd> kick</p>
-    <div class="go">CLICK TO BREACH</div>`, start);
+    ${ready ? '<div class="go">CLICK TO BREACH</div>' : `<div class="go" style="animation:none">LOADING SUSPECTS · ${Math.round(loading * 100)}%</div>`}`, ready ? start : null);
 }
 function start() {
   game.audio.start();
@@ -429,6 +497,8 @@ function step(dt) {
   }
   game.level.update(dt, t);
   game.gore.update(dt);
+  if (game.goreWorld) game.goreWorld.update(dt, { camera, playerPos: game.player.pos });
+  game.hcgore.update(dt);
   for (const f of flashes) { f.t -= dt; f.l.intensity = f.t > 0 ? 9 : 0; }
   for (const tr of tracers) tr.t -= dt;
   for (let i = tracers.length - 1; i >= 0; i--) {
@@ -437,7 +507,7 @@ function step(dt) {
   game.hud.update(dt, game);
   game.audio.setListener(camera);
   game.audio.update(dt);
-  game.squad.update(dt);
+  game.squad?.update(dt);
   fx.uniforms.time.value = t;
 }
 
@@ -492,10 +562,10 @@ if (TEST) {
     step: (n = 1, dt = 1 / 30) => { for (let i = 0; i < n; i++) step(dt); render(); return renderer.domElement.toDataURL('image/jpeg', 0.85); },
   };
   game.player.update(0, I);
-  render();
-  window.__ready = true;
+  spawnActors(() => {}).then(() => { step(1 / 30); render(); window.__ready = true; });
 } else {
-  menu();
+  menu(0);
   game.player.update(0, I);
+  spawnActors((p) => { if (game.state === 'menu') menu(p * 0.99); }).then(() => { if (game.state === 'menu') menu(1); });
   frame();
 }

@@ -12,10 +12,14 @@ const ML_PER_BLEED = 25;
 const ARTERIAL = new Set(['neck', 'femoral']);
 
 // Shared by suspects and hostages: wounds, bleeding, dismemberment, death.
+let nextId = 1;
+
 export class Actor {
   constructor(game, body, x, z, heading) {
     this.game = game;
+    this.id = nextId++;
     this.body = body;
+    this.kit = body.kit || null; // anatomical NPC (npc-kit) when available
     this.root = body.root;
     this.root.position.set(x, 0, z);
     this.heading = heading;
@@ -89,6 +93,42 @@ export class Actor {
     return { ...res, exit };
   }
 
+  // A round traced through the anatomical model. tr comes from kit.trace(),
+  // weapon is a kit weapon spec ({ energy, entryR, cavity, push }).
+  kitHit(tr, weapon, continued = false) {
+    const g = this.game, kit = this.kit;
+    const ph = kit.phys;
+    const before = { armR: ph.limbs.armR, canStand: ph.canStand, alive: ph.alive };
+    const res = kit.applyHit(tr, weapon, continued);
+    const ext = g.hcgore.onHit(this, tr, weapon, res);
+    const dir = tr.rayWorld.direction.clone();
+    if (res.exitWorld) g.gore.exitSplatter(res.exitWorld, dir, ext.seg.seg === 'head' ? 2 : 1 + res.remaining / 3000);
+    g.audio.play('flesh', { pos: tr.rayWorld.at(tr.distance, new THREE.Vector3()), volume: 1 });
+    const point = tr.rb.at(tr.entry.distance, new THREE.Vector3()).applyMatrix4(tr.M);
+    const deposited = weapon.energy - res.remaining;
+    const dmg = deposited / 40;
+    const brain = res.brainHit;
+    const aiRes = {
+      part: ext.seg.part, side: ext.seg.side,
+      organ: brain ? 'brain' : ext.seg.seg,
+      info: {
+        leg: ['thigh', 'shin', 'foot', 'pelvis'].includes(ext.seg.seg),
+        arm: ['uarm', 'farm', 'hand'].includes(ext.seg.seg),
+        disarm: before.armR > 0.5 && ph.limbs.armR < 0.5 ? 1 : ext.seg.seg === 'hand' && ext.seg.side === 'R' ? 0.8 : 0,
+        paralyze: !!ph.cord,
+        bleed: (ph.bleedRate || 0) / 25,
+        fatal: !ph.alive,
+      },
+      ext,
+    };
+    this.lastHit = { ...aiRes, dir, point };
+    if (!this.dead) {
+      if (!ph.alive || ph.brain <= 0) this.die(dir, aiRes);
+      else this.onWounded(aiRes, { dir, point }, dmg);
+    } else this.twitch = 1;
+    return res;
+  }
+
   findExit(point, dir) {
     const far = point.clone().addScaledVector(dir, 0.9);
     _ray.set(far, dir.clone().negate());
@@ -154,12 +194,25 @@ export class Actor {
     const fwd = new THREE.Vector3(Math.sin(this.heading), 0, Math.cos(this.heading));
     this.fallDir = fwd.dot(dir) > 0 ? 1 : -1;
     this.twitch = res?.organ === 'brain' ? 0.3 : 1;
+    if (this.kit) this.kit.goLimp();
     this.onDeath?.(res);
   }
 
   // Bleeding, soaking, drips, pools, death pose. Call every frame.
   updateBody(dt, t) {
     const g = this.game;
+    if (this.kit) {
+      // the kit runs the physiology; mirror it into the numbers the AI reads
+      const ph = this.kit.phys;
+      this.blood = ph.blood;
+      this.bleed = (ph.bleedRate || 0) / 25;
+      this.hp = 100 * Math.min(ph.consciousness, 1 - ph.lossFraction / 0.45);
+      if (this.dead) { this.deathT += dt; return; }
+      // out cold counts as down: he crumples and the ragdoll takes over
+      if (!ph.alive || ph.consciousness < 0.25) this.die(this.lastHit?.dir || new THREE.Vector3(0, 0, 1), this.lastHit);
+      else if (!ph.canStand && !this.prone) this.cantStand?.();
+      return;
+    }
     if (this.bleed > 0) {
       this.blood -= this.bleed * ML_PER_BLEED * dt;
       if (!this.dead && this.blood <= BLOOD_DOWN) this.die(this.lastHit?.dir || new THREE.Vector3(0, 0, 1), this.lastHit);

@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { Actor } from './actor.js';
 import { Body, standPose, pronePose, deadPose } from './body.js';
+import { KitBody } from './kitbody.js';
 
 const CLOTHES = [0x1d1d22, 0x2a2420, 0x202a22, 0x2a1d1d, 0x18181a, 0x2b2b2b, 0x30281e];
 const SKINS = [0xc9a089, 0xb98a6c, 0x8a5f45, 0xd8b098, 0x6e4a36];
@@ -19,7 +20,8 @@ function angleTo(from, to) {
 export class Enemy extends Actor {
   constructor(game, spawn) {
     const armed = spawn.type !== 'playdead';
-    const body = new Body({ shirt: pick(CLOTHES), pants: pick(CLOTHES), skin: pick(SKINS), mask: true, gun: armed, vest: armed && Math.random() < 0.6 });
+    const look = { shirt: pick(CLOTHES), pants: pick(CLOTHES), skin: pick(SKINS), mask: true, gun: armed, vest: armed && Math.random() < 0.6 };
+    const body = spawn.kit ? new KitBody(spawn.kit, look) : new Body(look);
     super(game, body, spawn.x, spawn.z, spawn.h);
     this.type = spawn.type;
     this.state = { playdead: 'playdead', ambush: 'ambush', patrol: 'patrol' }[spawn.type] || 'idle';
@@ -549,8 +551,10 @@ export class Enemy extends Actor {
       this.legDmg[res.side] += dmg;
       if (this.legDmg[res.side] > 22) this.limp = res.side;
     }
-    if (res.organ === 'pelvis') { this.legDmg.L += dmg * 0.5; this.legDmg.R += dmg * 0.5; }
-    if ((this.legDmg.L > 22 && this.legDmg.R > 22) || this.legDmg.L > 55 || this.legDmg.R > 55 || info.paralyze) this.goProne();
+    if (!this.kit) { // with the anatomical model the physiology decides when he can't stand (cantStand)
+      if (res.organ === 'pelvis') { this.legDmg.L += dmg * 0.5; this.legDmg.R += dmg * 0.5; }
+      if ((this.legDmg.L > 22 && this.legDmg.R > 22) || this.legDmg.L > 55 || this.legDmg.R > 55 || info.paralyze) this.goProne();
+    }
     if (info.disarm && res.side === 'R' && this.hasGun && Math.random() < info.disarm) this.dropGun(hit.dir);
     g.audio.play(this.hp < 40 ? 'scream' : 'pain', { pos: this.pos, rate: 0.85 + Math.random() * 0.3 });
     if (this.prone) return;
@@ -559,8 +563,10 @@ export class Enemy extends Actor {
     else if (this.state === 'combat' && this.tactic !== 'move') this.retake(this.hp < 60 ? 'retreat' : 'hold');
   }
 
+  cantStand() { this.goProne(); }
+
   onSevered(part) {
-    if (/R$/.test(part) && /Arm|hand/.test(part)) this.dropGun(new THREE.Vector3(0, -1, 0));
+    if (/R$/.test(part) && /arm|hand/i.test(part)) this.dropGun(new THREE.Vector3(0, -1, 0));
     if (/thigh|shin/.test(part)) this.goProne();
     if (!this.dead && !this.prone && !this.hasGun) this.setState('panic');
   }

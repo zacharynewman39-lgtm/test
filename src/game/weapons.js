@@ -3,11 +3,11 @@ import { flashTexture, fbm } from './textures.js';
 
 export const DEFS = {
   rifle: {
-    name: 'M4 Carbine · Semi', mag: 30, reserve: 150, rpm: 600, auto: false, damage: 52, pellets: 1, penetration: 2,
+    name: 'AR-10 7.62 · Semi', round: 'rifle', mag: 20, reserve: 120, rpm: 600, auto: false, damage: 52, pellets: 1, penetration: 2,
     hip: 0.03, ads: 0.002, recoil: 0.026, reload: 2.1, sound: 'rifle', fov: 50, adsZ: -0.2,
   },
   shotgun: {
-    name: 'M870 Shotgun', mag: 6, reserve: 36, rpm: 75, auto: false, damage: 21, pellets: 10, penetration: 0,
+    name: 'M870 Shotgun', round: 'shotgun', mag: 6, reserve: 36, rpm: 75, auto: false, damage: 21, pellets: 10, penetration: 0,
     hip: 0.07, ads: 0.05, recoil: 0.07, shellTime: 0.48, sound: 'shotgun', fov: 60, adsZ: -0.24,
   },
 };

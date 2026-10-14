@@ -522,6 +522,44 @@ export function buildLevel(scene, renderer) {
   };
   level.cellsByRoom = cellsByRoom;
 
+  // Is a point inside a wall or furniture? Returns the outward face normal.
+  // Boxes are bucketed into 1 m cells so blood droplets can ask cheaply.
+  const bucket = new Map();
+  for (const b of boxes) {
+    for (let z = Math.floor(b.minZ); z <= Math.floor(b.maxZ); z++) for (let x = Math.floor(b.minX); x <= Math.floor(b.maxX); x++) {
+      const k = x + ',' + z;
+      if (!bucket.has(k)) bucket.set(k, []);
+      bucket.get(k).push(b);
+    }
+  }
+  level.solidAt = (x, y, z) => {
+    if (y > WALL_H) return null;
+    const list = bucket.get(Math.floor(x) + ',' + Math.floor(z));
+    if (!list) return null;
+    for (const b of list) {
+      if (y > b.top || x < b.minX || x > b.maxX || z < b.minZ || z > b.maxZ) continue;
+      const d = [x - b.minX, b.maxX - x, z - b.minZ, b.maxZ - z, b.top - y];
+      const i = d.indexOf(Math.min(...d));
+      return [new THREE.Vector3(-1, 0, 0), new THREE.Vector3(1, 0, 0), new THREE.Vector3(0, 0, -1), new THREE.Vector3(0, 0, 1), new THREE.Vector3(0, 1, 0)][i];
+    }
+    return null;
+  };
+
+  // Ragdoll particles: settle on top of furniture, get pushed out of walls.
+  level.collide3D = (p, r) => {
+    const list = bucket.get(Math.floor(p.x) + ',' + Math.floor(p.z));
+    if (!list) return;
+    for (const b of list) {
+      if (p.y - r > b.top || p.x < b.minX - r || p.x > b.maxX + r || p.z < b.minZ - r || p.z > b.maxZ + r) continue;
+      const pushUp = b.top + r - p.y;
+      const pushes = [p.x - (b.minX - r), (b.maxX + r) - p.x, p.z - (b.minZ - r), (b.maxZ + r) - p.z];
+      const side = Math.min(...pushes);
+      if (b.top < 1.2 && pushUp < side + 0.15) { p.y = b.top + r; continue; }
+      const i = pushes.indexOf(side);
+      if (i === 0) p.x = b.minX - r; else if (i === 1) p.x = b.maxX + r; else if (i === 2) p.z = b.minZ - r; else p.z = b.maxZ + r;
+    }
+  };
+
   // --------------------------------------------------------------- collision
   // Push a circle (pos.x/pos.z, radius r) out of walls, furniture and doors.
   level.collide = (pos, r, maxTop = 0.35) => {

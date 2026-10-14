@@ -202,6 +202,19 @@ export class Gore {
     this.running.push({ i, w, len: 0.05, max: Math.min(point.y - 0.05, 0.6 + Math.random() * 1.0) / w, top: point.clone(), n: n.clone() });
   }
 
+  // Brain and skull fragments thrown onto whatever is behind a head shot.
+  brainSplatter(point, dir) {
+    this.ray.set(point, dir);
+    this.ray.far = 4;
+    const hit = this.ray.intersectObjects(this.level.occluders, false)[0];
+    if (!hit) return;
+    const n = hit.face.normal.clone().transformDirection(hit.object.matrixWorld);
+    _c.setRGB(0.55, 0.38, 0.36);
+    this.splats[Math.floor(Math.random() * 3)].add(hit.point.clone().addScaledVector(n, 0.002), n, 0.08 + Math.random() * 0.1, _c.getHex());
+    this.splat(hit.point, n, 0.35 + Math.random() * 0.3);
+    if (Math.abs(n.y) < 0.3 && hit.point.y > 0.4) this.wallRun(hit.point, n, 0.4);
+  }
+
   // Gibs: a severed limb or a chunk of skull.
   addChunk(obj, vel, spin, opts = {}) {
     if (!obj.parent) this.scene.add(obj);
@@ -312,7 +325,8 @@ export class Gore {
         if (c.vel.lengthSq() < 0.01 || c.t > 4) {
           c.rest = true;
           // lay severed limbs flat
-          if (o.isGroup) { o.rotation.x = Math.PI / 2 * Math.sign(o.rotation.x || 1); o.position.y = 0.06; }
+          if (o.userData.muzzle) { o.rotation.set(0, o.rotation.y, Math.PI / 2); o.position.y = 0.03; } // a dropped rifle lies on its side
+          else if (o.isGroup) { o.rotation.x = Math.PI / 2 * Math.sign(o.rotation.x || 1); o.position.y = 0.06; }
         }
       }
       if (c.bleed > 0 && Math.random() < dt * 25) {
