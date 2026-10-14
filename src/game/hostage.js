@@ -16,7 +16,7 @@ export class Hostage extends Actor {
 
   rescue() {
     this.state = 'leaving';
-    const bag = this.body.hitMeshes.find((m) => m.geometry.type === 'SphereGeometry' && m.scale.x > 0.115);
+    const bag = this.body.hitMeshes.find((m) => m.userData.sack);
     if (bag) { bag.visible = false; this.body.hitMeshes = this.body.hitMeshes.filter((m) => m !== bag); }
     this.game.audio.play('thanks', { pos: this.pos });
     this.game.onHostageRescued(this);

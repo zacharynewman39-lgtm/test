@@ -7,6 +7,12 @@ import { Hostage } from './hostage.js';
 import { Gore } from './gore.js';
 import { Audio } from './audio.js';
 import { HUD } from './hud.js';
+import { Squad } from './squad.js';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
+import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 
 const TEST = new URLSearchParams(location.search).has('test'); // headless test mode
 const TITLE = 'BLACK HOUSE';
@@ -16,7 +22,7 @@ renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
-renderer.toneMappingExposure = 1.1;
+renderer.toneMappingExposure = 1.4;
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 renderer.autoClear = false;
@@ -45,6 +51,7 @@ game.weapons = new Weapons(game, camera);
 game.exit = new THREE.Vector3(SPAWNS.exit.x, 0, SPAWNS.exit.z);
 for (const s of SPAWNS.enemies) game.enemies.push(new Enemy(game, s));
 for (const s of SPAWNS.hostages) game.hostages.push(new Hostage(game, s));
+game.squad = new Squad(game);
 
 // ------------------------------------------------------------------ helpers
 const ray = new THREE.Raycaster();
@@ -70,7 +77,9 @@ const targets = () => {
   return list;
 };
 
-// Player bullets. dirs: one per pellet.
+// Player bullets. dirs: one per pellet. Rifle rounds punch through bodies
+// and doors and keep going with less energy.
+const _seg = new THREE.Vector3();
 game.playerShot = (origin, dirs, def) => {
   const list = targets();
   let hitAny = false, killed = false;
@@ -79,35 +88,54 @@ game.playerShot = (origin, dirs, def) => {
   for (const dir of dirs) {
     ray.set(origin, dir);
     ray.far = 80;
-    const hit = ray.intersectObjects(list, false)[0];
-    if (!hit) continue;
-    const n = hit.face ? hit.face.normal.clone().transformDirection(hit.object.matrixWorld) : dir.clone().negate();
-    if (n.dot(dir) > 0) n.negate();
-    const body = hit.object.userData.body;
-    if (body) {
-      const actor = actorOf.get(body);
-      const wasDead = actor.dead;
-      const dist = hit.distance;
-      const falloff = def.pellets > 1 ? THREE.MathUtils.clamp(1.3 - dist / 14, 0.25, 1.2) : 1;
-      actor.takeHit({ mesh: hit.object, point: hit.point, normal: n, dir, damage: def.damage * falloff });
-      if (!wasDead && actor.dead) killed = true;
-      hitAny = true;
-      if (actor instanceof Hostage && !wasDead) game.hud.warn('HOLD YOUR FIRE — HOSTAGE HIT', 2);
-    } else {
-      if (!hit.object.userData.door) game.gore.bulletHole(hit.point, n);
-      else game.gore.dust(hit.point, n);
-      game.audio.play('impact', { pos: hit.point, volume: 0.5 });
+    const hits = ray.intersectObjects(list, false);
+    let damage = def.damage, through = def.penetration ?? 0;
+    const struck = new Set();
+    let end = origin.clone().addScaledVector(dir, 40);
+    for (const hit of hits) {
+      const n = hit.face ? hit.face.normal.clone().transformDirection(hit.object.matrixWorld) : dir.clone().negate();
+      if (n.dot(dir) > 0) n.negate();
+      const body = hit.object.userData.body;
+      if (body) {
+        const actor = actorOf.get(body);
+        if (struck.has(actor)) continue; // that's the same body's far side
+        struck.add(actor);
+        const wasDead = actor.dead;
+        const falloff = def.pellets > 1 ? THREE.MathUtils.clamp(1.3 - hit.distance / 14, 0.25, 1.2) : 1;
+        actor.takeHit({ mesh: hit.object, point: hit.point, normal: n, dir, damage: damage * falloff, uv: hit.uv });
+        if (!wasDead && actor.dead) killed = true;
+        hitAny = true;
+        if (actor instanceof Hostage && !wasDead) game.hud.warn('HOLD YOUR FIRE — HOSTAGE HIT', 2);
+        if (hit.distance < 2.5) game.hud.spatter(0.35);
+        damage *= 0.55;
+        if (through-- <= 0) { end = hit.point; break; }
+      } else {
+        const door = hit.object.userData.door;
+        if (!door) game.gore.bulletHole(hit.point, n);
+        else game.gore.dust(hit.point, n);
+        game.audio.play('impact', { pos: hit.point, volume: 0.6 });
+        if (door && through-- > 0) { damage *= 0.7; continue; }
+        end = hit.point;
+        break;
+      }
+    }
+    // rounds cracking past a suspect pin him down
+    for (const e of game.enemies) {
+      if (e.dead) continue;
+      const c = e.body.world('chest', _seg);
+      const t = THREE.MathUtils.clamp(c.clone().sub(origin).dot(dir), 0, origin.distanceTo(end));
+      const d = c.distanceTo(origin.clone().addScaledVector(dir, t));
+      if (d < 1.6) e.suppress((1.6 - d) * 0.5 / dirs.length * (def.pellets > 1 ? 3 : 1));
     }
   }
   if (hitAny) { game.stats.hits++; game.hud.hitmarker(killed); }
-  // everyone in earshot comes running
-  for (const e of game.enemies) e.hear(game.player.pos, 22);
+  game.squad.noise(game.player.pos, 22);
   flashAt(camera.localToWorld(new THREE.Vector3(0.1, -0.1, -0.6)), 0);
 };
 
 // world-space muzzle flash lights (fixed count so shaders don't recompile)
 const flashes = [0, 1].map(() => {
-  const l = new THREE.PointLight(0xffb060, 0, 9, 2);
+  const l = new THREE.PointLight(0xffb060, 0, 14, 2);
   scene.add(l);
   return { l, t: 0 };
 });
@@ -127,13 +155,15 @@ function tracer(a, b) {
   tracers.push({ l, t: 0.06 });
 }
 
-game.enemyShoot = (enemy, target, hostage) => {
+game.enemyShoot = (enemy, target, hostage, opts = {}) => {
   const gun = enemy.body.gun;
   if (!gun) return;
   const muzzle = gun.userData.muzzle.getWorldPosition(new THREE.Vector3());
-  game.audio.play('rifle', { pos: muzzle, volume: 0.9, rate: 0.92 + Math.random() * 0.1 });
+  game.audio.play('rifle', { pos: muzzle, volume: 1, rate: 0.92 + Math.random() * 0.1 });
+  const near = muzzle.distanceTo(camera.position);
+  if (near < 6) game.audio.deafen(0.5 * (1 - near / 6));
   flashAt(muzzle, 1);
-  for (const e of game.enemies) if (e !== enemy) e.hear(game.player.pos, 14);
+  game.squad.noise(enemy.pos, 10);
   if (hostage) {
     const head = hostage.body.hitMeshes.find((m) => m.userData.part === 'head');
     const dir = target.clone().sub(muzzle).normalize();
@@ -143,13 +173,15 @@ game.enemyShoot = (enemy, target, hostage) => {
   }
   const P = game.player;
   const d = muzzle.distanceTo(target);
-  let chance = 0.5 - d * 0.022 - Math.min(P.speed, 5) * 0.05 + Math.min(enemy.reactT - enemy.reaction, 1.5) * 0.1;
+  let chance = (0.36 - d * 0.02 - Math.min(P.speed, 5) * 0.05 + Math.min(enemy.reactT - enemy.reaction, 1.5) * 0.1) * enemy.skill;
   if (P.crouched) chance *= 0.8;
-  if (enemy.limp || enemy.bleed > 3) chance *= 0.7;
+  if (enemy.limp) chance *= 0.7;
+  chance *= 1 - enemy.shock * 0.6 - enemy.suppression * 0.5;
+  if (opts.blind) chance *= 0.25;
   chance = THREE.MathUtils.clamp(chance, 0.06, 0.85);
   const clear = game.lineOfSight(muzzle, target);
   if (clear && Math.random() < chance) {
-    P.damage(13 + Math.random() * 11, enemy.pos);
+    P.damage(10 + Math.random() * 9, enemy.pos);
     tracer(muzzle, target.clone().add(new THREE.Vector3(0, 0.1, 0)));
   } else {
     const dir = target.clone().sub(muzzle).normalize();
@@ -297,7 +329,7 @@ function interactPress() {
   if (d) {
     d.toggle(game.player.pos);
     game.audio.play('door', { pos: d.center, volume: 0.5 });
-    for (const e of game.enemies) e.hear(d.center, 4);
+    game.squad.noise(d.center, 4);
   }
 }
 
@@ -308,7 +340,7 @@ function kick() {
   if (d) {
     d.open(P.pos, true);
     game.audio.play('kick', { pos: d.center });
-    for (const e of game.enemies) e.hear(d.center, 14);
+    game.squad.noise(d.center, 14);
     return;
   }
   const ok = frontOf(1.4, 0.5);
@@ -358,6 +390,7 @@ window.addEventListener('resize', () => {
   camera.aspect = window.innerWidth / window.innerHeight;
   camera.updateProjectionMatrix();
   renderer.setSize(window.innerWidth, window.innerHeight);
+  composer.setSize(window.innerWidth, window.innerHeight);
 });
 
 // --------------------------------------------------------------------- loop
@@ -392,7 +425,7 @@ function step(dt) {
       heartT -= dt;
       if (heartT <= 0) { heartT = 0.85; game.audio.play('heartbeat', { volume: 0.9 }); }
     }
-    renderer.domElement.style.filter = game.player.hp < 35 ? `saturate(${0.3 + game.player.hp / 50})` : '';
+    fx.uniforms.hurt.value = game.player.hp < 40 ? 1 - game.player.hp / 40 : 0;
   }
   game.level.update(dt, t);
   game.gore.update(dt);
@@ -403,12 +436,45 @@ function step(dt) {
   }
   game.hud.update(dt, game);
   game.audio.setListener(camera);
+  game.audio.update(dt);
+  game.squad.update(dt);
+  fx.uniforms.time.value = t;
 }
 
+// ------------------------------------------------------------ post-process
+const composer = new EffectComposer(renderer, new THREE.WebGLRenderTarget(window.innerWidth, window.innerHeight, { type: THREE.HalfFloatType, samples: 4 }));
+composer.addPass(new RenderPass(scene, camera));
+const gunPass = new RenderPass(game.weapons.scene, game.weapons.camera);
+gunPass.clear = false;
+gunPass.clearDepth = true;
+composer.addPass(gunPass);
+const bloom = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 0.45, 0.5, 0.92);
+composer.addPass(bloom);
+composer.addPass(new OutputPass());
+// film grain, vignette, a touch of lens fringing; desaturates as you bleed out
+const fx = new ShaderPass({
+  uniforms: { tDiffuse: { value: null }, time: { value: 0 }, hurt: { value: 0 } },
+  vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
+  fragmentShader: `
+    uniform sampler2D tDiffuse; uniform float time; uniform float hurt; varying vec2 vUv;
+    float rnd(vec2 c){ return fract(sin(dot(c, vec2(12.9898, 78.233))) * 43758.5453); }
+    void main(){
+      vec2 d = vUv - 0.5;
+      float ca = 0.0012 + hurt * 0.004;
+      vec3 col = vec3(texture2D(tDiffuse, vUv + d * ca).r, texture2D(tDiffuse, vUv).g, texture2D(tDiffuse, vUv - d * ca).b);
+      float l = dot(col, vec3(0.299, 0.587, 0.114));
+      col = mix(col, vec3(l), hurt * 0.75);
+      col.r += hurt * 0.06;
+      float v = smoothstep(0.95, 0.3, length(d * vec2(1.15, 1.0)));
+      col *= mix(0.62, 1.0, v);
+      col += (rnd(vUv * 1000.0 + fract(time * 7.0)) - 0.5) * 0.045;
+      gl_FragColor = vec4(col, 1.0);
+    }`,
+});
+composer.addPass(fx);
+
 function render() {
-  renderer.clear();
-  renderer.render(scene, camera);
-  game.weapons.render(renderer);
+  composer.render();
 }
 
 function frame() {

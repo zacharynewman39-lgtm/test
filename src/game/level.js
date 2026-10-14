@@ -145,38 +145,41 @@ export function buildLevel(scene, renderer) {
 
   // ---------------------------------------------------------------- materials
   const std = (o) => new THREE.MeshStandardMaterial(o);
+  const set = (o, extra = {}) => std({ ...o, roughness: 1, normalScale: new THREE.Vector2(1, 1), ...extra });
   const wallMats = {
-    M: std({ map: T.wallpaperTexture('#6b5a4a', '#5e4e40', 1), roughness: 0.9 }),
-    T: std({ map: T.tileTexture(2, '#9aa39e', '#7d8580'), roughness: 0.4 }),
-    B: std({ map: T.wallpaperTexture('#4f5866', '#47505c', 3), roughness: 0.9 }),
-    R: std({ map: T.plasterTexture('#4a2a24', 4), roughness: 0.95 }),
-    H: std({ map: T.wallpaperTexture('#6e6650', '#625a46', 5), roughness: 0.9 }),
-    K: std({ map: T.plasterTexture('#857a5c', 6), roughness: 0.85 }),
-    L: std({ map: T.wallpaperTexture('#4d5a48', '#43503f', 7), roughness: 0.9 }),
-    E: std({ map: T.plasterTexture('#6a6455', 8), roughness: 0.9 }),
-    o: std({ map: T.sidingTexture(9), roughness: 0.9 }),
+    M: set(T.wallpaperSet('#7a6754', '#6b5947', 1)),
+    T: set(T.wainscotSet('#9fb0aa', '#8b918a', 2)),
+    B: set(T.wallpaperSet('#5d6878', '#535d6c', 3)),
+    R: set(T.plasterSet('#5a3229', 4, '#3a2a24')),
+    H: set(T.wallpaperSet('#7d7458', '#70684e', 5)),
+    K: set(T.wainscotSet('#c8c2b0', '#958a6a', 6)),
+    L: set(T.wallpaperSet('#5b6955', '#4f5d4a', 7)),
+    E: set(T.plasterSet('#7a7363', 8)),
+    o: set(T.sidingSet(9)),
   };
+  const wood = T.woodFloorSet(13), wood2 = T.woodFloorSet(17, [80, 56, 36]), tile = T.tileFloorSet(12), tile2 = T.tileFloorSet(16, '#a8a294', '#6f6a5f');
   const floorMats = {
-    M: std({ map: T.carpetTexture(11, '#4a3530'), roughness: 1 }),
-    T: std({ map: T.tileTexture(12), roughness: 0.35 }),
-    B: std({ map: T.woodTexture(13), roughness: 0.7 }),
-    R: std({ map: T.concreteTexture(14, '#4b4743'), roughness: 0.9 }),
-    H: std({ map: T.woodTexture(15), roughness: 0.7 }),
-    K: std({ map: T.tileTexture(16, '#a8a294', '#6f6a5f'), roughness: 0.45 }),
-    L: std({ map: T.woodTexture(17, [80, 56, 36]), roughness: 0.7 }),
-    E: std({ map: T.woodTexture(18), roughness: 0.7 }),
+    M: set(T.carpetSet(11, '#563d36')),
+    T: set(tile),
+    B: set(wood),
+    R: set(T.concreteSet(14, '#555049')),
+    H: set(wood),
+    K: set(tile2),
+    L: set(wood2),
+    E: set(wood),
   };
-  const trim = std({ color: 0x3a342c, roughness: 0.8 });
+  const trim = std({ color: 0x4a4238, roughness: 0.6 });
+  const doorWood = T.woodFloorSet(21, [74, 50, 32]), furnWood = T.woodFloorSet(22, [96, 66, 40]), darkWood = T.woodFloorSet(23, [52, 36, 24]);
   const mats = {
-    door: std({ map: T.woodTexture(21, [70, 48, 30]), roughness: 0.6 }),
+    door: set(doorWood, { roughness: 0.9 }),
     brass: std({ color: 0xa88a4a, metalness: 1, roughness: 0.35 }),
-    mattress: std({ color: 0x8c8574, roughness: 1 }),
-    wood: std({ map: T.woodTexture(22, [96, 66, 40]), roughness: 0.7 }),
-    darkwood: std({ map: T.woodTexture(23, [52, 36, 24]), roughness: 0.6 }),
-    porcelain: std({ color: 0xd8d6cc, roughness: 0.15 }),
-    altar: std({ map: T.concreteTexture(24, '#3a3330'), roughness: 0.9 }),
-    fabric: std({ color: 0x3e4a3e, roughness: 1 }),
-    counter: std({ map: T.concreteTexture(25, '#8a857a'), roughness: 0.4 }),
+    mattress: set(T.fabricSet('#8c8574', 41, 'knit')),
+    wood: set(furnWood),
+    darkwood: set(darkWood),
+    porcelain: std({ color: 0xd8d6cc, roughness: 0.12 }),
+    altar: set(T.concreteSet(24, '#3a3330')),
+    fabric: set(T.fabricSet('#3e4a3e', 42, 'denim')),
+    counter: set(T.concreteSet(25, '#8a857a'), { roughness: 0.6 }),
     metal: std({ color: 0xb8bcbc, metalness: 0.6, roughness: 0.35 }),
   };
 
@@ -186,10 +189,11 @@ export function buildLevel(scene, renderer) {
   const boxes = []; // static AABB colliders {minX,maxX,minZ,maxZ,top}
   const level = { group, occluders, boxes, doors: [], mats, shadowsDirty: true, W, H };
 
-  const addBox = (x0, x1, y0, y1, z0, z1, material, collide = true) => {
+  const addBox = (x0, x1, y0, y1, z0, z1, material, collide = true, wall = false) => {
     const geo = new THREE.BoxGeometry(x1 - x0, y1 - y0, z1 - z0);
     const c = new THREE.Vector3((x0 + x1) / 2, (y0 + y1) / 2, (z0 + z1) / 2);
-    T.worldUV(geo, c, 1.5);
+    if (wall) T.worldUV(geo, c, 2, 'wall', WALL_H);
+    else T.worldUV(geo, c, 2);
     const m = new THREE.Mesh(geo, material);
     m.position.copy(c);
     m.castShadow = m.receiveShadow = true;
@@ -197,6 +201,22 @@ export function buildLevel(scene, renderer) {
     occluders.push(m);
     if (collide) boxes.push({ minX: x0, maxX: x1, minZ: z0, maxZ: z1, top: y1 });
     return m;
+  };
+
+  // painted door casings either side of an opening
+  const casingMat = std({ color: 0x8b8475, roughness: 0.55 });
+  const casing = (axis, line, a, op) => {
+    const top = DOOR_H + (op === 'arch' ? 0.1 : 0);
+    const T2 = WALL_T / 2 + 0.02, wd = 0.07;
+    const pieces = [[a, a + wd, 0, top + wd], [a + 1 - wd, a + 1, 0, top + wd], [a, a + 1, top, top + wd]];
+    for (const [p0, p1, y0, y1] of pieces) {
+      const geo = axis === 'v' ? new THREE.BoxGeometry(T2 * 2, y1 - y0, p1 - p0) : new THREE.BoxGeometry(p1 - p0, y1 - y0, T2 * 2);
+      const m = new THREE.Mesh(geo, casingMat);
+      if (axis === 'v') m.position.set(line, (y0 + y1) / 2, (p0 + p1) / 2);
+      else m.position.set((p0 + p1) / 2, (y0 + y1) / 2, line);
+      m.castShadow = m.receiveShadow = true;
+      group.add(m);
+    }
   };
 
   // -------------------------------------------------------------------- walls
@@ -213,7 +233,7 @@ export function buildLevel(scene, renderer) {
       if (!run) return;
       const [a, b] = run.rooms;
       const mArr = [wallMats[b], wallMats[a], trim, trim, trim, trim];
-      addBox(X - WALL_T / 2, X + WALL_T / 2, 0, WALL_H, run.z0 - WALL_T / 2, run.z1 + WALL_T / 2, mArr);
+      addBox(X - WALL_T / 2, X + WALL_T / 2, 0, WALL_H, run.z0 - WALL_T / 2, run.z1 + WALL_T / 2, mArr, true, true);
       run = null;
     };
     for (let z = 0; z < H; z++) {
@@ -224,7 +244,8 @@ export function buildLevel(scene, renderer) {
         flush();
         if (faces && op) {
           const mArr = [wallMats[b], wallMats[a], trim, trim, trim, trim];
-          addBox(X - WALL_T / 2, X + WALL_T / 2, DOOR_H + (op === 'arch' ? 0.1 : 0), WALL_H, z, z + 1, mArr, false);
+          addBox(X - WALL_T / 2, X + WALL_T / 2, DOOR_H + (op === 'arch' ? 0.1 : 0), WALL_H, z, z + 1, mArr, false, true);
+          casing('v', X, z, op);
           if (op === 'door') {
             const d = new Door(level, 'v', X, z, z + 1);
             group.add(d.pivot); occluders.push(d.mesh); level.doors.push(d);
@@ -244,7 +265,7 @@ export function buildLevel(scene, renderer) {
       if (!run) return;
       const [a, b] = run.rooms;
       const mArr = [trim, trim, trim, trim, wallMats[b], wallMats[a]];
-      addBox(run.x0 - WALL_T / 2, run.x1 + WALL_T / 2, 0, WALL_H, Z - WALL_T / 2, Z + WALL_T / 2, mArr);
+      addBox(run.x0 - WALL_T / 2, run.x1 + WALL_T / 2, 0, WALL_H, Z - WALL_T / 2, Z + WALL_T / 2, mArr, true, true);
       run = null;
     };
     for (let x = 0; x < W; x++) {
@@ -255,7 +276,8 @@ export function buildLevel(scene, renderer) {
         flush();
         if (faces && op) {
           const mArr = [trim, trim, trim, trim, wallMats[b], wallMats[a]];
-          addBox(x, x + 1, DOOR_H + (op === 'arch' ? 0.1 : 0), WALL_H, Z - WALL_T / 2, Z + WALL_T / 2, mArr, false);
+          addBox(x, x + 1, DOOR_H + (op === 'arch' ? 0.1 : 0), WALL_H, Z - WALL_T / 2, Z + WALL_T / 2, mArr, false, true);
+          casing('h', Z, x, op);
           if (op === 'door') {
             const d = new Door(level, 'h', Z, x, x + 1);
             group.add(d.pivot); occluders.push(d.mesh); level.doors.push(d);
@@ -289,20 +311,20 @@ export function buildLevel(scene, renderer) {
     occluders.push(floor);
   }
   const roofMat = [trim, trim, std({ color: 0x24221f, roughness: 1 }),
-    std({ map: T.plasterTexture('#6f6a60', 30), roughness: 1 }), trim, trim];
+    set(T.ceilingSet(30)), trim, trim];
   const roof = addBox(0.6, W - 0.6, WALL_H, WALL_H + 0.25, 0.6, 11.4, roofMat, false);
   roof.userData.ceiling = true;
 
   const ground = new THREE.Mesh(new THREE.PlaneGeometry(160, 160).rotateX(-Math.PI / 2),
-    std({ map: T.grassTexture(31), roughness: 1 }));
-  ground.material.map.repeat.set(60, 60);
+    set(T.grassSet(31)));
+  for (const k of ['map', 'normalMap', 'roughnessMap']) ground.material[k].repeat.set(60, 60);
   ground.position.set(W / 2, -0.005, H / 2);
   ground.receiveShadow = true;
   ground.userData.floor = true;
   group.add(ground);
   occluders.push(ground);
   const path = new THREE.Mesh(new THREE.PlaneGeometry(1.4, 6).rotateX(-Math.PI / 2),
-    std({ map: T.concreteTexture(32, '#6a6862'), roughness: 0.95 }));
+    set(T.concreteSet(32, '#6a6862')));
   path.position.set(7.5, 0.001, 14);
   path.receiveShadow = true;
   path.userData.floor = true;
@@ -382,19 +404,31 @@ export function buildLevel(scene, renderer) {
       shadowed.push(l);
     }
     group.add(l);
-    lights.push({ light: l, base: intensity, flicker, seed: Math.random() * 100, state: 1 });
+    let fixture = null;
+    if (y > 2.3) { // ceiling fixture that glows with its light
+      fixture = new THREE.Mesh(new THREE.CylinderGeometry(0.14, 0.18, 0.06, 16),
+        new THREE.MeshStandardMaterial({ color: 0x222222, emissive: color, emissiveIntensity: 2 }));
+      fixture.position.set(x, WALL_H - 0.03, z);
+      group.add(fixture);
+    }
+    lights.push({ light: l, base: intensity, flicker, seed: Math.random() * 100, state: 1, fixture });
     return l;
   };
-  point(7.5, 2.3, 11.35, 0xffc890, 3.0, 6, 'buzz', 256); // porch
-  point(18.0, 1.5, 9.0, 0xffb070, 5.0, 9, 'soft', 512); // living lamp
-  point(18.7, 1.2, 2.7, 0xff5a2a, 6.0, 7, 'candle', 512); // ritual candles
-  point(11.7, 1.2, 1.7, 0x7fa0ff, 3.0, 6, 'tv', 256); // bedroom TV
-  point(6.2, 1.1, 7.3, 0xcfe6ff, 1.6, 3.5, null); // fridge
-  point(11.0, 2.45, 5.0, 0xffe0b0, 3.0, 6, 'dying', 256); // hall bulb
+  point(7.5, 2.3, 11.35, 0xffc890, 4.5, 8, 'buzz'); // porch
+  point(18.0, 1.5, 9.0, 0xffb070, 12.0, 13, 'soft', 512); // living lamp
+  point(12.5, 2.4, 8.5, 0xffd8a8, 6.0, 10, 'buzz'); // living ceiling
+  point(18.7, 1.2, 2.7, 0xff5a2a, 13.0, 10, 'candle', 512); // ritual candles
+  point(11.7, 1.2, 1.7, 0x7fa0ff, 7.0, 8, 'tv'); // bedroom TV
+  point(6.2, 1.1, 7.3, 0xcfe6ff, 4.0, 5, null); // fridge
+  point(3.8, 2.4, 9.3, 0xfff0d0, 5.0, 8, 'dying', 512); // kitchen strip light
+  point(3.8, 2.4, 2.8, 0xffd0a0, 4.0, 8, 'soft'); // master bedside
+  point(9.0, 2.4, 2.2, 0xe0f0ff, 3.5, 6, 'buzz'); // bathroom
+  point(7.9, 2.4, 9.9, 0xffe0b8, 2.5, 6, 'soft'); // entry
+  point(11.0, 2.45, 5.0, 0xffe0b0, 7.0, 9, 'dying', 256); // hall bulb
   const red = point(2.6, 1.6, 17.2, 0xff1010, 0, 7, null);
   const blue = point(3.8, 1.6, 17.4, 0x1030ff, 0, 7, null);
 
-  const street = new THREE.SpotLight(0xffc98a, 60, 30, 0.75, 0.6, 2);
+  const street = new THREE.SpotLight(0xffc98a, 120, 34, 0.8, 0.6, 2);
   street.position.set(2.5, 6, 19);
   street.target.position.set(8, 0, 11);
   street.castShadow = true;
@@ -408,10 +442,10 @@ export function buildLevel(scene, renderer) {
   pole.position.set(2.2, 3, 19.3);
   group.add(pole);
 
-  const hemi = new THREE.HemisphereLight(0x1d2738, 0x0a0806, 0.35);
+  const hemi = new THREE.HemisphereLight(0x46566e, 0x1c1812, 1.1);
   group.add(hemi);
-  scene.fog = new THREE.FogExp2(0x05070b, 0.035);
-  scene.background = new THREE.Color(0x05070b);
+  scene.fog = new THREE.FogExp2(0x0b0f16, 0.022);
+  scene.background = new THREE.Color(0x0b0f16);
 
   // -------------------------------------------------------------- navigation
   const doorEdge = new Set();
@@ -428,7 +462,7 @@ export function buildLevel(scene, renderer) {
   level.roomAt = (x, z) => room(Math.floor(x), Math.floor(z));
   level.cellCenter = (x, z) => new THREE.Vector3(x + 0.5, 0, z + 0.5);
 
-  level.findPath = (from, to) => {
+  level.findPath = (from, to, cost = null) => {
     const sx = Math.floor(from.x), sz = Math.floor(from.z);
     let tx = Math.floor(to.x), tz = Math.floor(to.z);
     if (!inGrid(sx, sz)) return null;
@@ -471,7 +505,7 @@ export function buildLevel(scene, renderer) {
           if (!(passable(x, z, nx, z) && passable(nx, z, nx, nz) && passable(x, z, x, nz) && passable(x, nz, nx, nz))) continue;
         } else if (!passable(x, z, nx, nz)) continue;
         const nk = key(nx, nz);
-        const ng = g.get(k) + (dx && dz ? 1.414 : 1);
+        const ng = g.get(k) + (dx && dz ? 1.414 : 1) + (cost ? cost(nx, nz) : 0);
         if (ng < (g.get(nk) ?? 1e9)) {
           g.set(nk, ng);
           came.set(nk, k);
@@ -544,6 +578,7 @@ export function buildLevel(scene, renderer) {
           break;
       }
     }
+    for (const L of lights) if (L.fixture) L.fixture.material.emissiveIntensity = 2.5 * L.light.intensity / L.base;
     policeT += dt;
     const ph = Math.floor(policeT * 6) % 4;
     red.intensity = ph === 0 || ph === 1 ? 12 : 0;

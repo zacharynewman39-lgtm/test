@@ -24,7 +24,7 @@ export class FPSPlayer {
     this._eye = new THREE.Vector3();
 
     this.flashlight = true;
-    this.torch = new THREE.SpotLight(0xfff1dc, 28, 24, 0.42, 0.55, 1.6);
+    this.torch = new THREE.SpotLight(0xfff1dc, 30, 32, 0.55, 0.55, 1.3);
     this.torch.castShadow = true;
     this.torch.shadow.mapSize.set(1024, 1024);
     this.torch.shadow.bias = -0.0004;
@@ -48,7 +48,7 @@ export class FPSPlayer {
 
   toggleFlashlight() {
     this.flashlight = !this.flashlight;
-    this.torch.intensity = this.flashlight ? 28 : 0;
+    this.torch.intensity = this.flashlight ? 30 : 0;
     this.game.audio.play('empty', { volume: 0.6, rate: 0.7 });
   }
 
@@ -117,7 +117,14 @@ export class FPSPlayer {
     if (this.stepAcc > stride && this.alive) {
       this.stepAcc = 0;
       g.audio.play('step', { volume: this.crouched ? 0.15 : this.sprinting ? 0.6 : 0.3, rate: 0.9 + Math.random() * 0.2 });
-      if (this.sprinting) for (const e of g.enemies) e.hear(this.pos, 6);
+      if (this.sprinting) g.squad.noise(this.pos, 6);
+      // walk through a pool and you track it around the house
+      if (g.gore.wetAt(this.pos) > 0.15) this.bloodySteps = 10;
+      if (this.bloodySteps > 0) {
+        this.bloodySteps--;
+        this.foot = -(this.foot || 1);
+        g.gore.footprint(this.pos, this.yaw + Math.PI, this.foot, this.bloodySteps / 10);
+      }
     }
 
     this.firedT += dt;

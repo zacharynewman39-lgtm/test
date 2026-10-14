@@ -14,7 +14,7 @@ npm run dev        # open the printed localhost URL
 | Input | Action |
 | --- | --- |
 | W A S D / Q / C | Move / sprint / crouch |
-| Mouse, LMB | Look, fire |
+| Mouse, LMB | Look, fire (rifle is semi-auto: one shot per click) |
 | Shift (or RMB) | Aim down sights |
 | R | Reload (the shotgun loads shell by shell; fire to interrupt) |
 | 1 / 2 or wheel | Rifle / shotgun |
@@ -27,10 +27,19 @@ npm run dev        # open the printed localhost URL
 - **The house** (`src/game/level.js`): an ASCII floor plan with 8 rooms,
   hinged doors, furniture, flickering lights and a nav grid. Edit `MAP`,
   `OPENINGS`, `FURNITURE` and `SPAWNS` to change the layout.
-- **Suspects** (`src/game/enemy.js`): masked cultists with different
-  behaviours. Guards and patrols investigate gunfire. Ambushers crouch and
-  wait. One plays dead until you walk past. The executioner goes for the
-  hostage the moment he spots you.
+- **Suspects** (`src/game/enemy.js`, `squad.js`): masked cultists with their
+  own personalities (aggression, skill, reaction time, preferred range).
+  - When you make noise, the two closest go to investigate with weapons up and
+    the rest dig in and hold an angle on the noise.
+  - Once you're spotted, the squad hands out roles:
+    - Holders take cover and peek.
+    - A pusher leapfrogs from cover to cover toward you.
+    - Flankers route around out of your sight.
+  - Cover is chosen from a live map of what you can see.
+  - Rounds cracking past them pin them down, and pinned suspects blind-fire
+    around corners. They reload, call out to each other, and retreat when hurt.
+  - Ambushers crouch and wait. One plays dead until you walk past. The
+    executioner goes for the hostage the moment he spots you.
 - **Wounds** (`src/game/body.js`, `actor.js`): every hit resolves to an
   organ (brain, heart, lungs, liver, spine, femoral artery…). Each organ has
   its own damage, bleed rate and effect:
@@ -38,9 +47,18 @@ npm run dev        # open the printed localhost URL
     crawling at you.
   - A gun-hand hit disarms him.
   - Heart and neck hits cause panic, then he bleeds out.
-- **Gore** (`src/game/gore.js`): blood spray particles, exit-wound splatter on
-  walls, drips and trails, spreading pools, severable limbs, exploding heads
-  and pumping stumps.
+- **Gore** (`src/game/gore.js`, `blood.js`, `actor.js`):
+  - Every body carries about 5 L of blood. Wounds bleed by organ, and a suspect
+    goes down after losing about 1.7 L.
+  - Exit wounds are traced through the body, and that side gets the mess.
+  - Rifle rounds penetrate bodies and doors.
+  - Blood soaks into clothes and skin around each wound (painted per mesh in UV
+    space) and spreads while he bleeds.
+  - Neck and femoral hits pulse arterial jets.
+  - Wall splatter runs down the wall.
+  - Pools spread under bodies, and walking through one leaves bloody
+    footprints.
+  - Limbs can be severed, heads can explode, and stumps keep pumping.
 - **Hostages** (`src/game/hostage.js`): hooded and kneeling, and they sob.
   Free them with E and they run for the street. Your bullets hurt them too.
 - **Audio** (`src/game/audio.js`): every sound is synthesised, positional, and

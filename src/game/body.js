@@ -1,4 +1,14 @@
 import * as THREE from 'three';
+import { fabricSet, skinSet, maskSet } from './textures.js';
+import { BloodMask, bloodify } from './blood.js';
+
+// Texture sets are slow to paint, so share them between bodies.
+const setCache = new Map();
+function cachedSet(key, make) {
+  if (!setCache.has(key)) setCache.set(key, make());
+  return setCache.get(key);
+}
+const hex = (c) => '#' + new THREE.Color(c).getHexString();
 
 // Placeholder human made of primitives. This is the module the real anatomical
 // model will replace: keep the same surface (root, joints, hitMeshes, resolveHit,
@@ -40,7 +50,7 @@ export class Body {
   constructor(opts = {}) {
     const {
       skin = 0xc9a089, shirt = 0x26262a, pants = 0x1c1c22, shoes = 0x111111,
-      mask = false, bag = false, gun = false, scale = 1,
+      mask = false, bag = false, gun = false, scale = 1, vest = false,
     } = opts;
     this.root = new THREE.Group();
     this.root.scale.setScalar(scale);
@@ -49,8 +59,19 @@ export class Body {
     this.partDamage = {};
     this.severed = new Set();
     this.stumps = [];
-    const M = (color, rough = 0.9) => new THREE.MeshStandardMaterial({ color, roughness: rough });
-    this.mats = { skin: M(skin, 0.6), shirt: M(shirt), pants: M(pants), shoes: M(shoes, 0.5) };
+    const M = (set, repeat = 2) => {
+      for (const k of ['map', 'normalMap', 'roughnessMap']) set[k].repeat.set(repeat, repeat);
+      return new THREE.MeshStandardMaterial({ ...set, roughness: 1 });
+    };
+    const skinKey = hex(skin), seed = (skin + shirt) % 997;
+    this.mats = {
+      skin: M(cachedSet('skin' + skinKey, () => skinSet(skin, 51)), 1),
+      shirt: M(cachedSet('knit' + hex(shirt), () => fabricSet(hex(shirt), 52 + seed, 'knit')), 3),
+      pants: M(cachedSet('denim' + hex(pants), () => fabricSet(hex(pants), 53 + seed, 'denim')), 3),
+      shoes: M(cachedSet('leather' + hex(shoes), () => fabricSet(hex(shoes), 54, 'leather')), 1),
+      vest: M(cachedSet('vest', () => fabricSet('#2a2c24', 55, 'denim')), 2),
+      mask: M(cachedSet('mask', () => maskSet(56)), 1),
+    };
     for (const n of JOINTS) {
       const g = new THREE.Group();
       g.rotation.order = 'YXZ';
@@ -79,8 +100,11 @@ export class Body {
     attach('shinR', 'footR', 0, -0.4, 0);
 
     const m = this.mats;
+    // every hittable mesh gets its own material + blood mask so stains stay where they land
     const add = (joint, geo, mat, x, y, z, part = joint) => {
-      const mesh = new THREE.Mesh(geo, mat);
+      const mask = new BloodMask(128);
+      const mesh = new THREE.Mesh(geo, bloodify(mat.clone(), mask));
+      mesh.userData.bloodMask = mask;
       mesh.position.set(x, y, z);
       mesh.castShadow = true;
       mesh.receiveShadow = true;
@@ -108,14 +132,9 @@ export class Body {
       void mat;
     }
     if (mask) {
-      const mm = new THREE.MeshStandardMaterial({ color: 0xe6e0d0, roughness: 0.45 });
-      const plate = new THREE.Mesh(new THREE.SphereGeometry(1, 16, 12, 0, Math.PI * 2, 0, Math.PI * 0.75), mm);
+      const plate = add('head', new THREE.SphereGeometry(1, 16, 12, 0, Math.PI * 2, 0, Math.PI * 0.75), m.mask, 0, 0.11, 0.055);
       plate.scale.set(0.088, 0.115, 0.07);
       plate.rotation.x = Math.PI / 2;
-      plate.position.set(0, 0.11, 0.055);
-      plate.userData.body = this; plate.userData.part = 'head';
-      J.head.add(plate);
-      this.hitMeshes.push(plate);
       const hole = new THREE.MeshBasicMaterial({ color: 0x000000 });
       for (const x of [-0.033, 0.033]) {
         const e = new THREE.Mesh(new THREE.CircleGeometry(0.016, 10), hole);
@@ -127,22 +146,19 @@ export class Body {
       const mouth = new THREE.Mesh(new THREE.PlaneGeometry(0.04, 0.005), hole);
       mouth.position.set(0, 0.06, 0.118);
       J.head.add(mouth);
-      const hood = new THREE.Mesh(new THREE.SphereGeometry(1, 14, 10, 0, Math.PI * 2, 0, Math.PI * 0.62), m.shirt);
+      const hood = add('head', new THREE.SphereGeometry(1, 14, 10, 0, Math.PI * 2, 0, Math.PI * 0.62), m.shirt, 0, 0.12, -0.012);
       hood.scale.set(0.115, 0.14, 0.125);
-      hood.position.set(0, 0.12, -0.012);
       hood.rotation.x = -0.35;
-      hood.userData.body = this; hood.userData.part = 'head';
-      J.head.add(hood);
-      this.hitMeshes.push(hood);
     }
     if (bag) {
-      const bm = new THREE.MeshStandardMaterial({ color: 0x7a6748, roughness: 1 });
-      const sack = new THREE.Mesh(new THREE.SphereGeometry(1, 14, 10), bm);
+      const burlap = M(cachedSet('burlap', () => fabricSet('#7a6748', 57, 'denim')), 2);
+      const sack = add('head', new THREE.SphereGeometry(1, 14, 10), burlap, 0, 0.1, 0.005);
       sack.scale.set(0.12, 0.15, 0.13);
-      sack.position.set(0, 0.1, 0.005);
-      sack.userData.body = this; sack.userData.part = 'head';
-      J.head.add(sack);
-      this.hitMeshes.push(sack);
+      sack.userData.sack = true;
+    }
+    if (vest) { // plate carrier with mag pouches
+      add('chest', new THREE.BoxGeometry(0.43, 0.27, 0.27), m.vest, 0, 0.13, 0, 'chest');
+      for (const x of [-0.1, 0, 0.1]) add('spine', new THREE.BoxGeometry(0.075, 0.12, 0.05), m.vest, x, 0.2, 0.12, 'abdomen');
     }
     if (gun) {
       this.gun = makeEnemyRifle();

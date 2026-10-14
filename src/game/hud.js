@@ -123,6 +123,8 @@ export class HUD {
     p.innerHTML = text + (progress !== null ? `<div class="prog"><div style="width:${progress * 100}%"></div></div>` : '');
   }
 
+  spatter(amount) { this.splatOpacity = Math.min(1, this.splatOpacity + amount); }
+
   hitmarker(kill) {
     const h = this.q('.hit');
     h.classList.toggle('kill', !!kill);

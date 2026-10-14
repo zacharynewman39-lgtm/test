@@ -77,6 +77,9 @@ export class Gore {
     this.dropDecals = new DecalPool(scene, T.splatTexture(110, 'drop'), 500, { order: 2 });
     this.pools = new DecalPool(scene, T.splatTexture(120, 'pool'), 40, { order: 1, roughness: 0.08 });
     this.holes = new DecalPool(scene, T.bulletHoleTexture(), 300, { order: 3, roughness: 0.9 });
+    this.runs = new DecalPool(scene, T.splatTexture(130, 'run'), 120, { order: 2 });
+    this.feet = new DecalPool(scene, T.splatTexture(140, 'foot'), 160, { order: 2 });
+    this.running = [];
     this.growing = [];
     // mist puffs
     this.puffTex = T.puffTexture();
@@ -115,6 +118,38 @@ export class Gore {
     this.puffs.push({ sp, t: 0, size: 0.25, life: 0.4 });
   }
 
+  smoke(pos, amount = 2) {
+    for (let i = 0; i < amount; i++) {
+      const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: this.puffTex, color: 0x9a968e, transparent: true, opacity: 0.22, depthWrite: false }));
+      sp.position.copy(pos).add(new THREE.Vector3((Math.random() - 0.5) * 0.1, (Math.random() - 0.5) * 0.1, (Math.random() - 0.5) * 0.1));
+      sp.scale.setScalar(0.1);
+      this.scene.add(sp);
+      this.puffs.push({ sp, t: 0, size: 0.6 + Math.random() * 0.5, life: 1.4 + Math.random(), rise: 0.25, op: 0.22 });
+    }
+  }
+
+  // A bloody footprint, facing `heading`.
+  footprint(pos, heading, side, wetness) {
+    const off = side * 0.09;
+    const p = new THREE.Vector3(pos.x + Math.cos(heading) * off, 0.0015, pos.z - Math.sin(heading) * off);
+    const k = 0.5 + wetness * 0.5;
+    _c.setRGB(0.22 * k, 0.008 * k, 0.008 * k);
+    this.feet.add(p, UP, 0.16, _c.getHex(), heading + Math.PI, 1.8);
+  }
+
+  // How much blood is on the floor here (0..1)?
+  wetAt(pos) {
+    let w = 0;
+    const pl = this.pools;
+    for (let i = 0; i < pl.mesh.count; i++) {
+      const p = pl.pos[i];
+      if (!p) continue;
+      const d = Math.hypot(p.x - pos.x, p.z - pos.z);
+      if (d < pl.size[i][0] * 0.45) w = Math.max(w, 1 - d / (pl.size[i][0] * 0.45));
+    }
+    return w;
+  }
+
   bulletHole(point, normal) {
     this.holes.add(point, normal, 0.06 + Math.random() * 0.03, 0xffffff);
     this.dust(point, normal);
@@ -151,7 +186,20 @@ export class Gore {
     const n = hit.face.normal.clone().transformDirection(hit.object.matrixWorld);
     const size = (0.25 + Math.random() * 0.35) * power * (1 - hit.distance / 5);
     this.splat(hit.point, n, size);
+    // on a wall, blood starts running down from the splat
+    if (Math.abs(n.y) < 0.3 && hit.point.y > 0.4 && Math.random() < 0.7) this.wallRun(hit.point, n, size);
     if (Math.random() < 0.5) this.splat(hit.point.clone().addScaledVector(dir, -0.05).add(new THREE.Vector3((Math.random() - 0.5) * 0.3, (Math.random() - 0.5) * 0.3, 0)), n, size * 0.5);
+  }
+
+  wallRun(point, n, size) {
+    _c.setRGB(0.24, 0.01, 0.01);
+    const w = size * 0.7;
+    // orient so the texture's top sits at the splat and streaks hang downward
+    _q.setFromUnitVectors(Z, n);
+    const up = new THREE.Vector3(0, 1, 0).applyQuaternion(_q.clone().invert());
+    const spin = Math.atan2(-up.x, up.y);
+    const i = this.runs.add(point, n, w, _c.getHex(), spin, 0.05);
+    this.running.push({ i, w, len: 0.05, max: Math.min(point.y - 0.05, 0.6 + Math.random() * 1.0) / w, top: point.clone(), n: n.clone() });
   }
 
   // Gibs: a severed limb or a chunk of skull.
@@ -227,8 +275,18 @@ export class Gore {
       p.t += dt;
       const k = p.t / p.life;
       p.sp.scale.setScalar(p.size * (0.4 + k * 0.8));
-      p.sp.material.opacity = 0.85 * (1 - k);
+      p.sp.material.opacity = (p.op ?? 0.85) * (1 - k);
+      if (p.rise) p.sp.position.y += p.rise * dt;
     }
+    // blood creeping down walls: grow the decal and keep its top pinned
+    for (const r of this.running) {
+      r.len = Math.min(r.max, r.len + dt * 0.25 * (1 - r.len / (r.max + 0.01)) * 3);
+      const pool = this.runs;
+      pool.size[r.i] = [r.w, r.w * r.len];
+      pool.pos[r.i] = r.top.clone().addScaledVector(r.n, 0.004).add(new THREE.Vector3(0, -r.w * r.len / 2 + r.w * 0.1, 0));
+      pool.write(r.i);
+    }
+    this.running = this.running.filter((r) => r.len < r.max - 0.01);
     this.puffs = this.puffs.filter((p) => {
       if (p.t < p.life) return true;
       this.scene.remove(p.sp); p.sp.material.dispose();

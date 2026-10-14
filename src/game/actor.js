@@ -2,8 +2,16 @@ import * as THREE from 'three';
 import { deadPose } from './body.js';
 
 const UP = new THREE.Vector3(0, 1, 0);
+const _ray = new THREE.Raycaster();
 
-// Shared by suspects and hostages: health, bleeding, wounds, dismemberment, death.
+// Blood model. An adult carries ~5 L. Organ bleed values in ORGANS are scaled
+// by ML_PER_BLEED into ml/s. Lose ~1.7 L and you go down for good.
+export const BLOOD_FULL = 5000;
+const BLOOD_DOWN = 3300;
+const ML_PER_BLEED = 25;
+const ARTERIAL = new Set(['neck', 'femoral']);
+
+// Shared by suspects and hostages: wounds, bleeding, dismemberment, death.
 export class Actor {
   constructor(game, body, x, z, heading) {
     this.game = game;
@@ -13,51 +21,101 @@ export class Actor {
     this.heading = heading;
     this.root.rotation.y = heading;
     game.scene.add(this.root);
-    this.hp = 100;
-    this.bleed = 0;
-    this.bloodLost = 0;
+    this.hp = 100; // tissue trauma
+    this.blood = BLOOD_FULL;
+    this.bleed = 0; // in ORGANS units; ml/s = bleed * ML_PER_BLEED
     this.alive = true;
     this.dead = false;
     this.deathT = 0;
     this.dripT = 0;
+    this.soakT = 0;
     this.pool = null;
     this.fallDir = 1;
     this.twitch = 0;
     this.lastHit = null;
+    this.wounds = [];
   }
 
   get pos() { return this.root.position; }
+  // 0 = fine, 1 = about to pass out from blood loss
+  get shock() { return THREE.MathUtils.clamp((BLOOD_FULL - this.blood) / (BLOOD_FULL - BLOOD_DOWN), 0, 1); }
 
-  // hit: { mesh, point, normal, dir, damage, weapon, pellet }
+  // hit: { mesh, point, normal, dir, damage, uv }
   takeHit(hit) {
     const g = this.game;
     const b = this.body;
     const res = b.resolveHit(hit.mesh, hit.point);
     const info = res.info;
     const dmg = hit.damage * info.mult;
+    const head = res.part === 'head';
     this.lastHit = { ...res, dir: hit.dir.clone(), point: hit.point.clone() };
 
-    // visuals: entry wound, spray back toward the shooter, exit spray + wall splatter
-    b.addWound(hit.mesh, hit.point, hit.normal, res.part === 'head' ? 0.018 : 0.024);
-    g.gore.spray(hit.point, hit.normal.clone().multiplyScalar(0.6).add(hit.dir.clone().multiplyScalar(-0.3)), 6, 1.5, 0.6);
-    g.gore.spray(hit.point, hit.dir, 14 + (info.fatal ? 30 : 0), 3.5, 0.35);
-    g.gore.mist(hit.point.clone().addScaledVector(hit.dir, 0.2), res.part === 'head' ? 0.5 : 0.28);
-    g.gore.exitSplatter(hit.point, hit.dir, res.part === 'head' ? 1.6 : 1);
-    g.audio.play('flesh', { pos: hit.point, volume: 0.9 });
+    // entry: small hole, soak the cloth/skin around it, back-spatter toward the shooter
+    b.addWound(hit.mesh, hit.point, hit.normal, head ? 0.016 : 0.02);
+    this.soak(hit.mesh, hit.uv, 0.16, 1, info.bleed);
+    g.gore.spray(hit.point, hit.normal.clone().multiplyScalar(0.7).add(hit.dir.clone().multiplyScalar(-0.3)), 8, 1.6, 0.6);
+    g.gore.mist(hit.point, head ? 0.35 : 0.2, 0x6a0606);
+
+    // exit: find where the round left the body; that side gets the real mess
+    const exit = this.findExit(hit.point, hit.dir);
+    const power = head ? 1.8 : 1.1;
+    if (exit) {
+      b.addWound(exit.object, exit.point, exit.normal, head ? 0.04 : 0.032, true);
+      this.soak(exit.object, exit.uv, 0.24, 1, info.bleed);
+      g.gore.spray(exit.point, hit.dir, 24 + (info.fatal ? 50 : 0), 4.2, 0.4, head ? 1.4 : 1);
+      g.gore.mist(exit.point.clone().addScaledVector(hit.dir, 0.15), head ? 0.7 : 0.4);
+      g.gore.exitSplatter(exit.point, hit.dir, power);
+      if (Math.random() < 0.5) g.gore.exitSplatter(exit.point, hit.dir.clone().add(new THREE.Vector3((Math.random() - 0.5) * 0.3, -0.15, (Math.random() - 0.5) * 0.3)).normalize(), power * 0.6);
+    } else {
+      g.gore.spray(hit.point, hit.dir, 16, 3.5, 0.4);
+      g.gore.exitSplatter(hit.point, hit.dir, power * 0.8);
+    }
+    // arteries pump in pulses out of the entry wound
+    if (ARTERIAL.has(res.organ) && hit.mesh.parent) this.arterialJet(hit.mesh, hit.point, hit.normal, res.organ === 'neck' ? 90 : 70);
+    g.audio.play('flesh', { pos: hit.point, volume: 1 });
 
     const sever = b.damagePart(res.part, hit.damage);
     if (sever) this.dismember(res.part, hit.dir);
 
+    this.blood -= dmg * 4; // immediate loss from the wound channel
     if (!this.dead) {
       this.hp -= dmg;
       this.bleed += info.bleed;
-      if (info.fatal || this.hp <= 0) this.die(hit.dir, res);
+      if (info.fatal || this.hp <= 0 || this.blood <= BLOOD_DOWN) this.die(hit.dir, res);
       else this.onWounded(res, hit, dmg);
     } else {
-      // corpse: just gore. Twitch a bit.
       this.twitch = Math.min(1, this.twitch + 0.6);
     }
-    return res;
+    return { ...res, exit };
+  }
+
+  findExit(point, dir) {
+    const far = point.clone().addScaledVector(dir, 0.9);
+    _ray.set(far, dir.clone().negate());
+    _ray.far = 0.9 - 0.01;
+    const hits = _ray.intersectObjects(this.body.hitMeshes, false);
+    const h = hits[0];
+    if (!h || h.distance > 0.88) return null;
+    const normal = h.face.normal.clone().transformDirection(h.object.matrixWorld);
+    if (normal.dot(dir) < 0) normal.negate();
+    return { object: h.object, point: h.point, normal, uv: h.uv };
+  }
+
+  soak(mesh, uv, radius, strength, bleed) {
+    const mask = mesh?.userData.bloodMask;
+    if (!mask || !uv) return;
+    mask.paint(uv, radius, strength);
+    this.wounds.push({ mask, uv: uv.clone(), r: radius, rate: bleed });
+  }
+
+  arterialJet(mesh, point, normal, rate) {
+    const joint = mesh.parent;
+    const o = new THREE.Object3D();
+    joint.add(o);
+    joint.updateWorldMatrix(true, false);
+    o.position.copy(joint.worldToLocal(point.clone()));
+    o.lookAt(point.clone().add(normal));
+    this.game.gore.emitter(o, rate, 7 + Math.random() * 4, new THREE.Vector3(0, 0.25, 1).normalize());
   }
 
   dismember(part, dir) {
@@ -99,33 +157,38 @@ export class Actor {
     this.onDeath?.(res);
   }
 
-  // Bleeding, drips, pools, death pose. Call every frame.
+  // Bleeding, soaking, drips, pools, death pose. Call every frame.
   updateBody(dt, t) {
     const g = this.game;
     if (this.bleed > 0) {
-      const lose = this.bleed * dt;
-      this.bloodLost += lose;
-      if (!this.dead) {
-        this.hp -= lose;
-        if (this.hp <= 0) this.die(this.lastHit?.dir || new THREE.Vector3(0, 0, 1), this.lastHit);
-      }
+      this.blood -= this.bleed * ML_PER_BLEED * dt;
+      if (!this.dead && this.blood <= BLOOD_DOWN) this.die(this.lastHit?.dir || new THREE.Vector3(0, 0, 1), this.lastHit);
       this.dripT -= dt * Math.min(this.bleed, 20);
       if (this.dripT <= 0 && !this.dead) {
-        this.dripT = 1.2;
+        this.dripT = 1.0;
         const p = this.body.world('pelvis', new THREE.Vector3());
         p.x += (Math.random() - 0.5) * 0.2; p.z += (Math.random() - 0.5) * 0.2;
-        g.gore.drip(p, 2);
+        g.gore.drip(p, 3);
+      }
+      // stains spread outward from each wound while it bleeds
+      this.soakT -= dt;
+      if (this.soakT <= 0) {
+        this.soakT = 0.6;
+        for (const w of this.wounds) {
+          if (w.r > 0.6) continue;
+          w.r += 0.02 + w.rate * 0.006;
+          w.mask.paint(w.uv, w.r, 0.22);
+        }
       }
     }
     if (this.dead) {
       this.deathT += dt;
       this.twitch = Math.max(0, this.twitch - dt * 0.25);
-      // knees go first, then the fall
       const k = this.deathT < 0.25 ? 8 : 6;
       this.body.blendPose(deadPose(this.fallDir, this.body.rand, this.deathT > 0.8 ? this.twitch : 0, t), dt, k);
       if (!this.pool && this.deathT > 0.7) {
         const c = this.body.world('chest', new THREE.Vector3());
-        this.pool = g.gore.pool(c, 0.8 + Math.min(this.bleed, 30) * 0.035, 0.12 + this.bleed * 0.01);
+        this.pool = g.gore.pool(c, 1.5 + Math.min(this.bleed, 30) * 0.05, 0.3 + this.bleed * 0.02);
       }
       this.bleed = Math.max(0, this.bleed - dt * 0.6);
     }

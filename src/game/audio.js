@@ -57,12 +57,40 @@ function voice(s, pitch, formants, amp) {
   return env(out, amp);
 }
 
+// Layered gunshot: supersonic crack, muzzle blast, sub boom, bolt clack,
+// early reflections off nearby walls and a room tail, all driven into soft
+// clipping so it hits like a real indoor shot.
 function gunshot(heavy) {
-  const crack = env(biquad(noise(0.05), 'hp', 2500), (t) => Math.exp(-t * 90));
-  const body = env(biquad(noise(0.5), 'lp', heavy ? 1100 : 1700), (t) => Math.exp(-t * (heavy ? 10 : 15)));
-  const thump = env(tone(0.3, (t) => (heavy ? 55 : 75) * (1 - t)), (t) => Math.exp(-t * 18));
-  const tail = env(biquad(noise(1.4), 'lp', 500), (t) => Math.exp(-t * 3.5));
-  return normalize(mix([crack, 0.6], [body, 1], [thump, heavy ? 1.4 : 1], [tail, 0.35]));
+  const T = 1.8, n = len(T);
+  const out = new Float32Array(n);
+  // N-wave crack (~1 ms)
+  const cw = Math.floor(SR * 0.0012);
+  for (let i = 0; i < cw; i++) out[i] += (i < cw / 2 ? 1 : -1) * 1.6;
+  // muzzle blast
+  const blast = env(biquad(noise(0.35), 'lp', heavy ? 3200 : 4500), (t) => Math.min(1, t * 4000) * Math.exp(-t * (heavy ? 16 : 22)));
+  // low-mid body
+  const body = env(biquad(noise(0.5), 'bp', heavy ? 350 : 500, 0.7), (t) => Math.exp(-t * (heavy ? 9 : 12)));
+  // sub boom sweeping down
+  const boom = env(tone(0.5, (t) => (heavy ? 110 : 140) * Math.exp(-t * 6) + 38), (t) => Math.min(1, t * 800) * Math.exp(-t * (heavy ? 6 : 8)));
+  // action cycling
+  const clack = env(biquad(noise(0.03), 'bp', 2600, 3), (t) => Math.exp(-t * 150));
+  for (let i = 0; i < blast.length; i++) out[i] += blast[i] * 1.4;
+  for (let i = 0; i < body.length; i++) out[i] += body[i] * 1.2;
+  for (let i = 0; i < boom.length; i++) out[i] += boom[i] * (heavy ? 2.2 : 1.7);
+  const co = len(heavy ? 0.06 : 0.045);
+  for (let i = 0; i < clack.length; i++) out[i + co] += clack[i] * 0.35;
+  // early reflections
+  const dry = out.slice(0, len(0.12));
+  const refl = biquad(dry, 'lp', 2500);
+  for (const [ms, gain] of [[7, 0.55], [13, 0.42], [21, 0.32], [33, 0.24], [47, 0.18]]) {
+    const o = len(ms / 1000);
+    for (let i = 0; i < refl.length && i + o < n; i++) out[i + o] += refl[i] * gain;
+  }
+  // room tail
+  const tail = env(biquad(noise(T), 'lp', 900), (t) => Math.min(1, t * 30) * Math.exp(-t * 2.4));
+  for (let i = 0; i < n; i++) out[i] += tail[i] * 0.32;
+  for (let i = 0; i < n; i++) out[i] = Math.tanh(out[i] * 2.2);
+  return normalize(out, 0.98);
 }
 
 function build() {
@@ -138,9 +166,28 @@ export class Audio {
     comp.threshold.value = -14;
     comp.ratio.value = 6;
     comp.connect(ctx.destination);
+    // everything except your own gun runs through a lowpass and a duck so a shot
+    // can deafen the room for a moment
+    this.deaf = ctx.createBiquadFilter();
+    this.deaf.type = 'lowpass';
+    this.deaf.frequency.value = 20000;
+    this.deaf.connect(comp);
     this.master = ctx.createGain();
     this.master.gain.value = 0.8;
-    this.master.connect(comp);
+    this.master.connect(this.deaf);
+    this.gunBus = ctx.createGain();
+    this.gunBus.gain.value = 1.0;
+    const gunComp = ctx.createDynamicsCompressor();
+    gunComp.threshold.value = -6; gunComp.ratio.value = 3; gunComp.attack.value = 0.001; gunComp.release.value = 0.1;
+    this.gunBus.connect(gunComp).connect(ctx.destination);
+    // tinnitus: a thin whine that builds with repeated shots indoors
+    this.ring = ctx.createOscillator();
+    this.ring.frequency.value = 4100;
+    this.ringGain = ctx.createGain();
+    this.ringGain.gain.value = 0;
+    this.ring.connect(this.ringGain).connect(ctx.destination);
+    this.ring.start();
+    this.ear = 0;
     // small-room reverb send
     const ir = ctx.createBuffer(2, len(1.3), SR);
     for (let c = 0; c < 2; c++) {
@@ -152,7 +199,7 @@ export class Audio {
     this.verbSend = ctx.createGain();
     this.verbSend.gain.value = 0.3;
     this.verbSend.connect(this.verb);
-    this.verb.connect(this.master);
+    this.verb.connect(this.deaf);
 
     const drone = ctx.createBufferSource();
     drone.buffer = this.buffers.drone;
@@ -179,6 +226,44 @@ export class Audio {
       L.setOrientation(f.x, f.y, f.z, 0, 1, 0);
     }
   }
+
+  // Your own shot: full volume, then the world goes muffled and duck for a beat.
+  gunshot(name) {
+    const ctx = this.ctx;
+    if (!ctx) return;
+    const src = ctx.createBufferSource();
+    src.buffer = this.buffers[name];
+    src.playbackRate.value = 0.96 + Math.random() * 0.08;
+    const g = ctx.createGain();
+    g.gain.value = 1.0;
+    src.connect(g);
+    g.connect(this.gunBus);
+    const send = ctx.createGain();
+    send.gain.value = 0.9;
+    g.connect(send).connect(this.verbSend);
+    src.start();
+    this.deafen(name === 'shotgun' ? 1 : 0.8);
+  }
+
+  deafen(amount) {
+    const ctx = this.ctx;
+    if (!ctx) return;
+    const t = ctx.currentTime;
+    const f = this.deaf.frequency, m = this.master.gain;
+    f.cancelScheduledValues(t); m.cancelScheduledValues(t);
+    f.setValueAtTime(Math.max(350, 1400 - amount * 900), t);
+    f.exponentialRampToValueAtTime(20000, t + 0.6 + amount * 0.9);
+    m.setValueAtTime(0.8 * (1 - amount * 0.65), t);
+    m.linearRampToValueAtTime(0.8, t + 0.5 + amount * 0.8);
+    this.ear = Math.min(1, this.ear + amount * 0.22);
+    const rg = this.ringGain.gain;
+    rg.cancelScheduledValues(t);
+    rg.setValueAtTime(rg.value, t);
+    rg.linearRampToValueAtTime(0.012 * this.ear, t + 0.15);
+    rg.exponentialRampToValueAtTime(0.0001, t + 1.5 + this.ear * 4);
+  }
+
+  update(dt) { this.ear = Math.max(0, this.ear - dt * 0.08); }
 
   play(name, { pos = null, volume = 1, rate = 1 } = {}) {
     const ctx = this.ctx;
