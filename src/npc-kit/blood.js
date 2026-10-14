@@ -92,9 +92,9 @@ export class BloodFX {
   }
 
   // emit `ml` of blood split into droplets
-  spray(origin, dir, speed, ml, { spread = 0.25, kind = 0, dropMl = 0.05, speedJitter = 0.35 } = {}) {
+  spray(origin, dir, speed, ml, { spread = 0.25, kind = 0, dropMl = 0.02, speedJitter = 0.35 } = {}) {
     let count = Math.max(1, Math.round(ml / dropMl));
-    if (count > 400) { dropMl = ml / 400; count = 400; }
+    if (count > 600) { dropMl = ml / 600; count = 600; }
     for (let i = 0; i < count && this.n < MAX_P; i++) {
       const k = this.n++;
       const v = dropMl * (0.3 + Math.random() * 1.4);
@@ -111,21 +111,21 @@ export class BloodFX {
   jet(origin, normal, mmHg, mlThisFrame, dt) {
     const dp = Math.max(0, mmHg) * 133.32;
     const v = 0.55 * Math.sqrt((2 * dp) / RHO); // orifice losses
-    if (mlThisFrame > 0) this.spray(origin, normal, v, mlThisFrame, { spread: 0.05, dropMl: 0.012, speedJitter: 0.1 });
+    // a coherent stream: many small drops on nearly the same trajectory
+    if (mlThisFrame > 0) this.spray(origin, normal, v, mlThisFrame, { spread: 0.025, dropMl: 0.02, speedJitter: 0.08 });
     return v;
   }
 
+  // drops of ~0.25 mL fall from `origin`; emitted stochastically so every
+  // source keeps its own average rate
   drip(origin, ml) {
     if (ml <= 0) return;
-    this._acc = (this._acc || 0) + ml;
-    while (this._acc > 0.25) {
-      this._acc -= 0.25;
-      this.spray(origin, this._d.set(0, -1, 0), 0.05, 0.25, { spread: 0.4, dropMl: 0.25 });
-    }
+    let n = Math.floor(ml / 0.25) + (Math.random() < (ml % 0.25) / 0.25 ? 1 : 0);
+    while (n-- > 0) this.spray(origin, this._d.set(0, -1, 0), 0.05, 0.25, { spread: 0.4, dropMl: 0.25 });
   }
 
   chunks(origin, dir, speed, count, kind) {
-    for (let i = 0; i < count; i++) this.spray(origin, dir, speed, 0.6, { spread: 0.55, kind, dropMl: 0.6 });
+    for (let i = 0; i < count; i++) this.spray(origin, dir, speed, 0.25, { spread: 0.55, kind, dropMl: 0.25 });
   }
 
   mist(origin, dir, speed, ml) {
@@ -191,13 +191,13 @@ export class BloodFX {
       if (kind === 3 && this.life[i] > 1.5) dead = true;
       if (dead) { this.kill(i); i--; continue; }
       // stretch droplets along their velocity
-      const s = kind === 1 ? Math.max(r, 0.004) * 1.4 : kind === 2 ? Math.max(r, 0.003) : kind === 3 ? 0.0008 : r * 1.25;
+      const s = kind === 1 ? r * 1.1 : kind === 2 ? r * 0.7 : kind === 3 ? 0.0008 : r * 1.25;
       if (sp > 0.01) this._q.setFromUnitVectors(this._d.set(0, 1, 0), this._p.set(this.vel[k3] / sp, this.vel[k3 + 1] / sp, this.vel[k3 + 2] / sp));
       // fast droplets read as streaks (motion + surface tension necking)
-      this._s.set(s, s * (1 + Math.min(sp * 0.9, 6)), s);
+      this._s.set(s * 0.8, s * 0.8 * (1 + Math.min(sp * 0.6, 3.5)), s * 0.8);
       this._m.compose(this._p.set(this.pos[k3], this.pos[k3 + 1], this.pos[k3 + 2]), this._q, this._s);
       this.dropMesh.setMatrixAt(w, this._m);
-      const c = kind === 1 ? [0.45, 0.12, 0.12] : kind === 2 ? [0.9, 0.86, 0.76] : [1, 1, 1];
+      const c = kind === 1 ? [0.32, 0.07, 0.07] : kind === 2 ? [0.9, 0.86, 0.76] : [1, 1, 1];
       col[w * 3] = c[0]; col[w * 3 + 1] = c[1]; col[w * 3 + 2] = c[2];
       w++;
     }
@@ -205,7 +205,30 @@ export class BloodFX {
     this.dropMesh.instanceMatrix.needsUpdate = true;
     this.dropMesh.instanceColor.needsUpdate = true;
 
-    // pools spread slowly and clot
+    // blood on the ground is ~3 mm deep: cells holding more than that
+    // spill into their neighbours, so a pool spreads to its true area and
+    // seeps out from under the body
+    this._spreadT = (this._spreadT || 0) + dt;
+    if (this._spreadT > 0.1) {
+      this._spreadT = 0;
+      const cap = 0.003 * CELL * CELL * 1e6; // mL per cell
+      const spill = [];
+      for (const [key, c] of this.cells) {
+        if (c.vol <= cap) continue;
+        const ex = (c.vol - cap) * 0.5;
+        c.vol -= ex;
+        const [i, j] = key.split(',').map(Number);
+        for (const [di, dj] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) spill.push([i + di, j + dj, ex / 4, c]);
+      }
+      for (const [i, j, v, src] of spill) {
+        const key = i + ',' + j;
+        let c = this.cells.get(key);
+        if (!c) { c = { x: i * CELL, z: j * CELL, vol: 0, age: src.age, seed: Math.random() }; this.cells.set(key, c); }
+        c.vol += v;
+      }
+      if (spill.length) this.poolsDirty = true;
+    }
+    // pools clot and darken
     if (this.poolsDirty || (this._poolT = (this._poolT || 0) + dt) > 0.5) {
       this._poolT = 0;
       this.poolsDirty = false;
@@ -214,8 +237,8 @@ export class BloodFX {
     for (const c of this.cells.values()) c.age += dt;
     for (let i = 0; i < this.pools.length; i++) {
       const p = this.pools[i];
-      const spread = 1 + 0.25 * Math.min(1, p.age / 60);
-      const r = Math.sqrt((p.vol * 1e-6) / (Math.PI * 0.003)) * spread;
+      const cap = 0.003 * CELL * CELL * 1e6;
+      const r = Math.sqrt((Math.min(p.vol, cap) * 1e-6) / (Math.PI * 0.003)) * 1.5;
       const gy = this.groundHeight(p.x, p.z);
       this._m.compose(this._p.set(p.x, gy + 0.001 + (i % 7) * 0.00004, p.z), this._q.identity(), this._s.set(r, 1, r));
       this.poolMesh.setMatrixAt(i, this._m);

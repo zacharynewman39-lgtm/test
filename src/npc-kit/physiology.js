@@ -93,7 +93,15 @@ export class Physiology {
   damage(hit) {
     this.pain = Math.min(1, this.pain + 0.35);
     const seen = new Set();
+    const organKey = (p) => ['liver', 'spleen', 'kidney', 'heart', 'heart_blood', 'lung', 'stomach', 'intestine', 'colon', 'pancreas'].includes(p.tissue)
+      ? p.tissue.replace('heart_blood', 'heart') + (sideOf(p.name) || '') : 'id' + p.id;
+    const merged = new Map();
     for (const seg of hit.segments) {
+      const k = organKey(seg.part);
+      const m = merged.get(k);
+      if (m) m.length = Math.min(0.2, m.length + seg.length); else merged.set(k, { ...seg });
+    }
+    for (const seg of merged.values()) {
       const p = seg.part; const n = p.name; const L = seg.length; // metres travelled in the part
       if (seen.has(p.id)) continue; seen.add(p.id);
       const side = sideOf(n);
@@ -119,8 +127,9 @@ export class Physiology {
           break;
         }
         case 'heart': case 'heart_blood': {
-          this.heart = Math.max(0, this.heart - (p.tissue === 'heart_blood' ? 0.45 : 0.3));
-          this.addBleed({ part: n, rate: 90 * Math.min(1, L / 0.02 + 0.3), external: 0.15, anchor, pulsatile: true, cavity: 'pericardium' });
+          // through-and-through ventricles: pump failure within seconds
+          this.heart = Math.max(0, this.heart - Math.min(0.95, 0.35 + 8 * L));
+          this.addBleed({ part: n, rate: 60 * Math.min(1, L / 0.03 + 0.3), external: 0.15, anchor, pulsatile: true, cavity: 'pericardium' });
           this.log('heart penetrated: ' + n);
           break;
         }
@@ -138,9 +147,10 @@ export class Physiology {
           this.addBleed({ part: n, rate: 0.55 * r * r * frac, external: ext, anchor, clots: true });
           break;
         }
-        case 'liver': this.addBleed({ part: n, rate: 7 + 120 * L, external: 0.15, anchor, clots: true, slow: true }); this.log('liver laceration'); break;
-        case 'spleen': this.addBleed({ part: n, rate: 9 + 150 * L, external: 0.1, anchor, slow: true }); this.log('spleen ruptured'); break;
-        case 'kidney': this.addBleed({ part: n, rate: 5 + 80 * L, external: 0.1, anchor, clots: true }); this.log('kidney hit'); break;
+        // solid organ lacerations: heavy, mostly internal (haemoperitoneum), slow to clot
+        case 'liver': this.addBleed({ part: n, rate: 2.5 + 70 * L, external: 0.12, anchor, clots: true, slow: true }); this.log('liver laceration'); break;
+        case 'spleen': this.addBleed({ part: n, rate: 3 + 80 * L, external: 0.08, anchor, slow: true }); this.log('spleen ruptured'); break;
+        case 'kidney': this.addBleed({ part: n, rate: 1.5 + 45 * L, external: 0.1, anchor, clots: true }); this.log('kidney hit'); break;
         case 'lung': {
           const s = /left/i.test(n) ? 'L' : 'R';
           this.pneumo[s] = Math.max(this.pneumo[s], 0.02);
@@ -149,6 +159,14 @@ export class Physiology {
           break;
         }
         case 'airway':
+          if (/bronchial tree/i.test(n)) {
+            // segmental bronchi sit inside the lung: a lung wound that also bleeds into the airway
+            const s2 = /left/i.test(n) ? 'L' : 'R';
+            this.pneumo[s2] = Math.max(this.pneumo[s2], 0.02);
+            this.addBleed({ part: n, rate: 1 + 25 * L, external: 0.1, anchor, clots: true, cavity: 'thorax', aspirate: true });
+            this.log(`${s2 === 'L' ? 'left' : 'right'} lung punctured: pneumothorax, blood in the airway`);
+            break;
+          }
           this.airway = Math.max(0, this.airway - 0.5);
           this.addBleed({ part: n, rate: 1.2, external: 0.6, anchor, clots: true, aspirate: true });
           this.log('airway breached: aspirating blood');
@@ -221,7 +239,8 @@ export class Physiology {
     const ventilation = this.apnoea || this.arrest || this.brain <= 0 ? 0 : lungFn * this.airway;
     this.rr = ventilation <= 0 ? 0 : 14 + 22 * smooth(0.15, 0.45, loss) + 16 * (1 - lungFn);
     const spo2Target = ventilation <= 0 ? 0.0 : 0.98 - 0.45 * (1 - Math.min(1, ventilation * 1.6));
-    const rate = spo2Target < this.spo2 ? (ventilation <= 0 ? 0.008 : 0.03) : 0.1;
+    // apnoea: O2 reserve lasts ~1-2 min before saturation collapses
+    const rate = spo2Target < this.spo2 ? (ventilation <= 0 ? 0.0011 : 0.03) : 0.1;
     this.spo2 += (spo2Target - this.spo2) * Math.min(1, dt * rate * 10);
     this.spo2 = Math.max(0, Math.min(0.99, this.spo2));
 
@@ -234,11 +253,11 @@ export class Physiology {
       if (b.pulsatile) {
         // pressure-driven, surges each systole
         const wave = this.arrest ? 0 : Math.max(0, Math.sin(this.phase * Math.PI * 2)) ** 2;
-        q = b.rate * Math.sqrt(pressure) * (this.arrest ? 0.05 : 0.45 + 1.1 * wave);
+        q = b.rate * Math.sqrt(pressure) * (this.arrest ? 0.05 * Math.exp(-(this.t - (this.timeOfDeath ?? this.t)) / 45) : 0.45 + 1.1 * wave);
         b.surge = wave;
       } else {
         q = b.rate * (0.35 + 0.65 * pressure);
-        if (this.arrest) q = b.rate * 0.08; // passive drainage after death
+        if (this.arrest) q = b.rate * 0.08 * Math.exp(-(this.t - (this.timeOfDeath ?? this.t)) / 45); // passive drainage, tapering
       }
       if (b.clots) { b.clot = Math.min(0.92, b.clot + dt / (b.slow ? 400 : 140)); q *= 1 - b.clot; }
       if (b.cavity === 'pericardium') { this.tamponade += q * dt * 0.35; }
@@ -267,7 +286,7 @@ export class Physiology {
       else if (tamp > 0.95) this.die('cardiac tamponade');
       else if (loss > 0.55) this.die('exsanguination (' + Math.round(this.blood0 - this.blood) + ' mL lost)');
       else if (this.lowPerfusionTime > 6) this.die('haemorrhagic shock: cardiac arrest');
-      else if (this.hypoxiaTime > 25) this.die(this.apnoea ? 'respiratory paralysis: hypoxic arrest' : 'hypoxic cardiac arrest');
+      else if (this.hypoxiaTime > 60) this.die(this.apnoea ? 'respiratory paralysis: hypoxic arrest' : 'hypoxic cardiac arrest');
     }
     return this;
   }

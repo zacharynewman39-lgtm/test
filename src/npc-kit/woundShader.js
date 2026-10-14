@@ -19,6 +19,8 @@ export function createGoreUniforms() {
     uStainCount: { value: 0 },
     uGoreTime: { value: 0 },
     uXRay: { value: 0 },
+    uPallor: { value: 0 },     // haemorrhagic shock / death
+    uCyanosis: { value: 0 },   // low oxygen saturation
   };
 }
 
@@ -33,6 +35,8 @@ uniform vec4 uStainDir[MAX_STAINS];
 uniform int uStainCount;
 uniform float uGoreTime;
 uniform float uXRay;
+uniform float uPallor;
+uniform float uCyanosis;
 uniform float uRevealDist; // >0: tissue only exists within this distance (m) of a wound tract
 uniform float uLayerScale;
 uniform float uGoreKind; // 0 skin, 1 cloth, 2 tissue, 3 fat, 4 bone
@@ -117,6 +121,11 @@ export function applyGore(material, uniforms, kind, layerScale = 1, { revealOnly
                        uGoreKind > 3.5 ? vec3(0.55, 0.42, 0.36) : mix(diffuseColor.rgb * 0.5, vec3(0.30, 0.01, 0.01), 0.55);
             diffuseColor.rgb = raw * (0.7 + 0.3 * g_noise(vBindPos * 900.0));
           } else if (uGoreKind < 0.5) {
+            // shock pallor (blood leaves the skin: waxy, grey-yellow) and cyanosis (blue-grey)
+            float lum = dot(diffuseColor.rgb, vec3(0.3, 0.55, 0.15));
+            vec3 pale = vec3(lum * 1.08, lum * 1.04, lum * 0.92);
+            diffuseColor.rgb = mix(diffuseColor.rgb, pale, uPallor * 0.85);
+            diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * vec3(0.78, 0.84, 1.08), uCyanosis * 0.7);
             diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.30, 0.10, 0.14), bruise * 0.45);
             diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.20, 0.03, 0.02), rim * 0.9);
           } else if (uGoreKind < 1.5) {

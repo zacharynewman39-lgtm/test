@@ -47,6 +47,8 @@ export function createGoreWorld({ scene, renderer, baseUrl = '/npc/', groundHeig
   const blood = new BloodFX(scene, { groundHeight });
   const world = {
     scene, renderer, baseUrl, groundHeight, blood, npcs: [], t: 0, xray: 0,
+    // optional callbacks: onHit(npc, report), onDown(npc), onDeath(npc, cause)
+    onHit: null, onDown: null, onDeath: null,
     async spawnNPC(opts = {}) {
       const npc = await GoreNPC.create(world, opts);
       world.npcs.push(npc);
@@ -64,15 +66,27 @@ export function createGoreWorld({ scene, renderer, baseUrl = '/npc/', groundHeig
       for (let p = 0; p < w.pellets; p++) {
         const d = direction.clone().normalize();
         if (w.spread) d.add(new THREE.Vector3((Math.random() - 0.5) * 2, (Math.random() - 0.5) * 2, (Math.random() - 0.5) * 2).multiplyScalar(w.spread)).normalize();
-        let best = null;
-        for (const n of world.npcs) {
-          const r = n.trace(origin, d, w);
-          if (r && (!best || r.distance < best.distance)) best = r;
-        }
-        if (best) {
-          const res = best.npc.applyHit(best, w);
-          report.hit = true; report.npc = best.npc;
+        // follow the projectile through every body segment it perforates
+        let o = origin.clone();
+        let energy = w.energy;
+        let entryR = w.entryR;
+        const skip = new Set();
+        for (let seg = 0; seg < 4 && energy > 40; seg++) {
+          let best = null;
+          for (const n of world.npcs) {
+            const r = n.trace(o, d, skip);
+            if (r && (!best || r.distance < best.distance)) best = r;
+          }
+          if (!best) break;
+          const res = best.npc.applyHit(best, { ...w, energy, entryR }, seg > 0);
+          world.onHit?.(best.npc, res);
+          report.hit = true; report.npc = report.npc || best.npc;
           report.parts.push(...res.parts); report.events.push(...res.events);
+          if (!res.exitWorld) break;
+          energy = res.remaining;
+          entryR = Math.max(w.entryR, res.exitR * 0.6);  // a deformed/tumbling round
+          skip.add(best.bone.name);
+          o = res.exitWorld.clone().addScaledVector(d, 0.002);
         }
       }
       return report;
@@ -132,7 +146,7 @@ class GoreNPC {
         sheenColor: new THREE.Color(0.9, 0.5, 0.5), specularIntensity: 0.7,
       });
       // interior tissue is only ever seen through wounds: clip it to their surroundings
-      applyGore(mat, this.uniforms, isBone ? 4 : layer === 'fat' ? 3 : 2, LAYER_SCALE[layer] ?? 0.9, { revealDist: 0.07 });
+      applyGore(mat, this.uniforms, isBone ? 4 : layer === 'fat' ? 3 : 2, LAYER_SCALE[layer] ?? 0.9, { revealDist: 0.045 });
       mesh.material = mat;
       this.anatMats[layer] = mat;
     }
@@ -147,7 +161,11 @@ class GoreNPC {
     this.ragdoll = new Ragdoll(this.root, this.npc.bone, this.world.groundHeight);
     this.lastJoints = null;
     this.deadFor = 0;
-    this.emitted = new Map();
+    this.wasAlive = true;
+    this.mouthAnchor = null;
+    for (const m of this.npc.morphMeshes) m.morphTargetInfluences.fill(0);
+    this.npc.bone('eye.L').quaternion.identity();
+    this.npc.bone('eye.R').quaternion.identity();
     this.applyXRay(this.world.xray);
   }
 
@@ -176,7 +194,7 @@ class GoreNPC {
   }
 
   // find the first skin interval this ray passes through
-  trace(origin, dir, weapon) {
+  trace(origin, dir, skip = new Set()) {
     this.root.updateWorldMatrix(true, true);
     const ray = new THREE.Ray(origin, dir);
     const hits = [];
@@ -187,7 +205,7 @@ class GoreNPC {
     hits.sort((x, y) => x.t - y.t);
     const tried = new Set();
     for (const h of hits) {
-      if (tried.has(h.frame)) continue;
+      if (tried.has(h.frame) || skip.has(h.frame)) continue;
       tried.add(h.frame);
       const bone = this.npc.bone(h.frame);
       const M = this.boneMatrix(bone);
@@ -198,14 +216,15 @@ class GoreNPC {
       if (!skin.length) continue;
       const entry = skin[0];
       if (entry.face.normal.dot(rb.direction) > 0) continue; // started inside
-      const exit = skin.find((s, i) => i > 0 && s.face.normal.dot(rb.direction) > 0);
+      // a closed skin: the next crossing after the entry is the exit
+      const exit = skin.find((s) => s.distance > entry.distance + 0.003);
       const entryWorld = entry.point.clone().applyMatrix4(M);
       return { npc: this, bone, M, inv, rb, entry, exit, distance: entryWorld.distanceTo(origin), rayWorld: ray };
     }
     return null;
   }
 
-  applyHit(tr, weapon) {
+  applyHit(tr, weapon, continued = false) {
     const { rb, entry, exit, bone, M } = tr;
     const d0 = entry.distance;
     const d1 = exit ? exit.distance : d0 + 0.6;
@@ -284,11 +303,13 @@ class GoreNPC {
     const blood = this.world.blood;
     const wEntry = pEntry.clone().applyMatrix4(M);
     const dirW = tr.rayWorld.direction.clone();
-    blood.spray(wEntry, dirW.clone().negate(), 1.5 + Math.random(), 1.5 + weapon.energy / 1500, { spread: 0.5 });
+    // back-spatter: a fine spray toward the shooter
+    blood.spray(wEntry, dirW.clone().negate(), 1.2 + Math.random(), 0.3 + weapon.energy / 3000, { spread: 0.45, dropMl: 0.006 });
+    let wExit = null;
     if (exits) {
-      const wExit = pEnd.clone().applyMatrix4(M);
+      wExit = pEnd.clone().applyMatrix4(M);
       const vol = 4 + remaining / 60 + (boneHit ? 6 : 0) + (brainHit ? 20 : 0);
-      blood.spray(wExit, dirW, 3 + remaining / 300, vol, { spread: 0.35, dropMl: 0.06 });
+      blood.spray(wExit, dirW, 3 + remaining / 300, vol, { spread: 0.35, dropMl: 0.025 });
       if (weapon.energy > 1500) blood.mist(wExit, dirW, 6, vol * 0.3);
       if (brainHit) blood.chunks(wExit, dirW, 4 + remaining / 400, 18, 1);
       if (boneHit) blood.chunks(wExit, dirW, 4, 8, 2);
@@ -302,7 +323,7 @@ class GoreNPC {
     }
     this.pendingImpulse = { point: wEntry, vel: dirW.clone().multiplyScalar(weapon.push * 1.2) };
     this.applyXRay(this.world.xray);
-    return { parts: hitParts.map((h) => h.part.name), events };
+    return { parts: hitParts.map((h) => h.part.name), events, exitWorld: wExit, remaining, exitR: rExit };
   }
 
   addWound(w) {
@@ -327,7 +348,10 @@ class GoreNPC {
     const ph = this.phys.step(dt);
     const cond = { rr: ph.rr, consciousness: ph.consciousness, pain: ph.pain, alive: ph.alive, limbs: ph.limbs };
 
+    if (this.wasAlive && !ph.alive) this.world.onDeath?.(this, ph.cause);
+    this.wasAlive = ph.alive;
     if (!this.ragdoll.active && !ph.canStand) {
+      this.world.onDown?.(this);
       this.ragdoll.activate(this.lastJoints, dt);
       if (this.pendingImpulse) this.ragdoll.impulse(this.pendingImpulse.point, this.pendingImpulse.vel);
     }
@@ -344,7 +368,42 @@ class GoreNPC {
     }
     this.root.updateWorldMatrix(true, true);
     this.emitBlood(dt);
+    this.orificeBleeding(dt, t);
     this.uniforms.uGoreTime.value = t;
+    const loss = ph.lossFraction;
+    const pallor = Math.max(smooth01(0.12, 0.45, loss), ph.alive ? 0 : Math.min(1, 0.5 + this.deadFor / 30));
+    this.uniforms.uPallor.value = pallor;
+    this.uniforms.uCyanosis.value = smooth01(0.92, 0.6, ph.spo2) * (ph.alive ? 1 : 0.7);
+  }
+
+  // blood from the mouth (lung/airway injury: coughed with each breath),
+  // nose and ears (skull/facial fractures)
+  orificeBleeding(dt, t) {
+    const ph = this.phys;
+    const blood = this.world.blood;
+    const head = this.npc.bone('head');
+    const M = this.boneMatrix(head);
+    const at = (x, y, z) => new THREE.Vector3(x, y, z).applyMatrix4(M);
+    const fwd = new THREE.Vector3(0, -0.2, 1).transformDirection(M);
+    const airwayBlood = ph.hemothorax > 30 || ph.airway < 1 || ph.bleeds.some((b) => b.aspirate);
+    const mouth = head.userData.restHead.clone().add(new THREE.Vector3(0, -0.075, 0.105));
+    if (airwayBlood && ph.alive && ph.rr > 0) {
+      this.coughT = (this.coughT ?? 0) - dt;
+      if (this.coughT <= 0) {
+        this.coughT = 1.5 + Math.random() * 3.5;
+        const ml = 1 + Math.random() * 3 + ph.hemothorax / 400;
+        blood.spray(at(mouth.x, mouth.y, mouth.z), fwd, 1.5 + Math.random() * 1.5, ml, { spread: 0.3, dropMl: 0.03 });
+        blood.mist(at(mouth.x, mouth.y, mouth.z), fwd, 2.5, ml * 0.2);
+        this.npc.morph && this.npc.morph('jawOpen', 0.6);
+        if (this.anchors.length < MAX_STAINS && !this.mouthAnchor) this.mouthAnchor = this.addAnchor(head, mouth, new THREE.Vector3(0, -0.3, 1));
+        if (this.mouthAnchor) this.mouthAnchor.vol += ml * 0.6;
+      }
+    }
+    if (ph.fracture.skull || ph.brain <= 0) {
+      const ml = (ph.alive ? 0.25 : 0.06) * dt;
+      for (const sx of [-0.012, 0.012]) blood.drip(at(head.userData.restHead.x + sx, head.userData.restHead.y - 0.035, head.userData.restHead.z + 0.115), ml);
+      if (ph.brain <= 0) for (const sx of [-0.075, 0.075]) blood.drip(at(head.userData.restHead.x + sx, head.userData.restHead.y + 0.01, head.userData.restHead.z + 0.0), ml * 0.5);
+    }
   }
 
   captureJoints() {
@@ -402,6 +461,12 @@ class GoreNPC {
   }
 
   get vitals() { return this.phys.vitals(); }
+  get alive() { return this.phys.alive; }
+  get position() { return this.root.position; }
+  dispose() {
+    this.world.scene.remove(this.root);
+    this.world.npcs.splice(this.world.npcs.indexOf(this), 1);
+  }
   get events() { return this.phys.events; }
 }
 
@@ -420,6 +485,11 @@ function rayCapsule(ray, a, b, r) {
     if (d < r) { const te = t - Math.sqrt(r * r - d * d); if (best === null || te < best) best = te; }
   }
   return best;
+}
+
+function smooth01(a, b, x) {
+  const t = Math.min(1, Math.max(0, (x - a) / (b - a)));
+  return t * t * (3 - 2 * t);
 }
 
 function distToSegment(p, a, b) {

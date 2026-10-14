@@ -38,7 +38,7 @@ KEEP = {'bone': 0.45, 'cartilage': 0.5, 'disc': 0.4, 'muscle': 0.18, 'tendon': 0
         'vein': 0.2, 'mesentery': 0.12, 'duct': 0.3, 'nerve': 0.5, 'brain': 0.35, 'white_matter': 0.5, 'brainstem': 0.6, 'cerebellum': 0.6,
         'csf': 0.5}
 RIGID = {'bone', 'cartilage', 'disc'}
-MIN_DEPTH = {'bone': 0.003, 'muscle': 0.0035, 'artery': 0.004, 'vein': 0.003, 'tendon': 0.0025}
+MIN_DEPTH = {'bone': 0.0045, 'muscle': 0.0055, 'artery': 0.006, 'vein': 0.005, 'tendon': 0.0045, 'nerve': 0.005}
 FAT_DEPTH = 0.0025  # dermis; the fat surface sits just under the skin
 
 
@@ -130,21 +130,31 @@ def main():
         items.append(dict(name=name, system='nervous', tissue='nerve', P=P, F=F, src='synth'))
 
     # -------------------------------------------------- keep inside the skin
+    # use the subdivided (rendered) skin surface, posed like the reference
     fv = body['body_fv']
-    btris = geom.quads_to_tris(fv)
     bv = np.unique(fv)
-    Np = geom.vertex_normals(Vp, btris)
-    tree = cKDTree(Vp[bv])
+    loc = np.full(len(body['V']), -1)
+    loc[bv] = np.arange(len(bv))
+    S, q2, _ = geom.subdivide(loc[fv], None, body['V'][bv], levels=1)
+    sub_tris = geom.quads_to_tris(q2)
+    Vps = S @ Vp[bv]
+    Nps = geom.vertex_normals(Vps, sub_tris)
+    tree = cKDTree(Vps)
     pushed = 0
     for i in items:
-        md = MIN_DEPTH.get(i['tissue'], 0.004)
-        d, k = tree.query(i['P'])
-        sp, sn = Vp[bv][k], Np[bv][k]
+        md = MIN_DEPTH.get(i['tissue'], 0.006)
+        d, k = tree.query(i['P'], k=4)
+        w_ = 1 / np.maximum(d, 1e-5)
+        w_ /= w_.sum(1, keepdims=True)
+        sp = (Vps[k] * w_[..., None]).sum(1)
+        sn = (Nps[k] * w_[..., None]).sum(1)
+        sn /= np.linalg.norm(sn, axis=1, keepdims=True)
         depth = ((sp - i['P']) * sn).sum(1)
         m = depth < md
         pushed += int(m.sum())
         i['P'][m] -= sn[m] * (md - depth[m])[:, None]
     log('pushed inside skin', pushed)
+    btris = geom.quads_to_tris(fv)
 
     # -------------------------------------------------- weights + unpose
     log('interior weights')
@@ -161,14 +171,15 @@ def main():
         i['j'], i['w'] = j, w
 
     # -------------------------------------------------- subcutaneous fat
+    # just under the rendered (subdivided) skin, skinned like the skin
     V, W = body['V'], body['W']
-    Nb = geom.vertex_normals(V, btris)
-    loc = np.full(len(V), -1)
-    loc[bv] = np.arange(len(bv))
-    fatP = V[bv] - Nb[bv] * FAT_DEPTH
-    j, w = top4(W[bv])
+    Ps = S @ V[bv]
+    Ns = geom.vertex_normals(Ps, sub_tris)
+    Ws = S @ W[bv]
+    fatP = Ps - Ns * FAT_DEPTH
+    j, w = top4(Ws)
     items.append(dict(name='Subcutaneous fat', system='integumentary', tissue='fat', bind=fatP,
-                      F=loc[btris][:, ::1], j=j, w=w, src='synth', P=fatP))
+                      F=sub_tris, j=j, w=w, src='synth', P=fatP))
 
     export(items, body, args.out)
 
