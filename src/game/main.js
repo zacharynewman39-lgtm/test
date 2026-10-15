@@ -20,13 +20,13 @@ const TEST = new URLSearchParams(location.search).has('test'); // headless test 
 const TITLE = 'BLACK HOUSE';
 
 const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance', preserveDrawingBuffer: TEST });
-renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1));
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = 1.4;
 renderer.shadowMap.enabled = true;
-renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.shadowMap.type = THREE.PCFShadowMap;
 renderer.autoClear = false;
 document.body.appendChild(renderer.domElement);
 
@@ -191,7 +191,7 @@ game.playerShot = (origin, dirs, def) => {
       if (d < 1.6) e.suppress((1.6 - d) * 0.5 / dirs.length * (def.pellets > 1 ? 3 : 1));
     }
   }
-  if (hitAny) { game.stats.hits++; game.hud.hitmarker(killed); }
+  if (hitAny) { game.stats.hits++; game.hud.hitmarker(killed); game.audio.play(killed ? 'kill' : 'hit', { volume: killed ? 0.9 : 0.6 }); }
   game.squad.noise(game.player.pos, 22);
   flashAt(camera.localToWorld(new THREE.Vector3(0.1, -0.1, -0.6)), 0);
 };
@@ -334,9 +334,12 @@ window.addEventListener('keydown', (e) => {
   if (e.code === 'KeyR') W.reload();
   if (e.code === 'Digit1') W.switchTo('rifle');
   if (e.code === 'Digit2') W.switchTo('shotgun');
-  if (e.code === 'KeyF') P.toggleFlashlight();
+  if (e.code === 'KeyT') P.toggleFlashlight();
   if (e.code === 'KeyV') kick();
-  if (e.code === 'KeyE') interactPress();
+  if (e.code === 'KeyF') interactPress();
+  if (e.code === 'KeyC') P.crouchToggle = !P.crouchToggle;
+  if (e.code === 'KeyG') throwFlashbang();
+  if (e.code === 'Space') e.preventDefault();
 });
 window.addEventListener('keyup', (e) => { I.keys[e.code] = false; });
 window.addEventListener('mousedown', (e) => {
@@ -401,6 +404,66 @@ function interactPress() {
   }
 }
 
+// --------------------------------------------------------------- flashbangs
+game.flashbangs = 3;
+const bangs = [];
+const bangMat = new THREE.MeshStandardMaterial({ color: 0x3a3f36, metalness: 0.6, roughness: 0.5 });
+const bangLight = new THREE.PointLight(0xffffff, 0, 16, 2);
+scene.add(bangLight);
+function throwFlashbang() {
+  if (game.state !== 'play' || game.flashbangs <= 0) return;
+  game.flashbangs--;
+  const m = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.03, 0.11, 10), bangMat);
+  const fwd = camera.getWorldDirection(new THREE.Vector3());
+  m.position.copy(camera.position).addScaledVector(fwd, 0.4);
+  m.castShadow = true;
+  scene.add(m);
+  bangs.push({ m, v: fwd.multiplyScalar(10).add(new THREE.Vector3(0, 2.2, 0)).add(game.player.vel), t: 1.5 });
+  game.audio.play('pump', { volume: 0.7, rate: 1.6 });
+  game.hud.feed('FLASHBANG OUT · ' + game.flashbangs + ' LEFT');
+}
+function updateBangs(dt) {
+  bangLight.intensity = Math.max(0, bangLight.intensity - dt * 900);
+  for (const b of bangs) {
+    b.v.y -= 9.81 * dt;
+    const next = b.m.position.clone().addScaledVector(b.v, dt);
+    const n = game.level.solidAt(next.x, next.y, next.z);
+    if (n) { b.v.reflect(n).multiplyScalar(0.45); game.audio.play('impact', { pos: b.m.position, volume: 0.4, rate: 0.7 }); }
+    else b.m.position.copy(next);
+    if (b.m.position.y < 0.03) { b.m.position.y = 0.03; b.v.y *= -0.35; b.v.x *= 0.7; b.v.z *= 0.7; }
+    b.m.rotation.x += dt * 9; b.m.rotation.z += dt * 6;
+    b.t -= dt;
+    if (b.t <= 0) detonate(b);
+  }
+  for (let i = bangs.length - 1; i >= 0; i--) if (bangs[i].t <= 0) bangs.splice(i, 1);
+}
+function detonate(b) {
+  const p = b.m.position.clone().add(new THREE.Vector3(0, 0.1, 0));
+  scene.remove(b.m);
+  bangLight.position.copy(p);
+  bangLight.intensity = 300;
+  game.audio.play('shotgun', { pos: p, volume: 1.4, rate: 1.4 });
+  game.squad?.noise(p, 25);
+  const near = p.distanceTo(camera.position);
+  if (near < 14) game.audio.deafen(Math.min(1, 1.4 - near / 10));
+  for (const e of game.enemies) {
+    if (e.dead) continue;
+    const eye = e.body.headPos(new THREE.Vector3());
+    const d = eye.distanceTo(p);
+    if (d < 10 && game.lineOfSight(p, eye)) {
+      e.stunT = Math.max(e.stunT || 0, 5 - d * 0.35);
+      e.flinch = 1;
+      if (e.kit) e.kit.screamT = 1;
+      game.audio.play('scream', { pos: e.pos, rate: 0.8 + Math.random() * 0.2 });
+    }
+  }
+  // you, if you were looking at it
+  if (near < 14 && game.lineOfSight(p, camera.position)) {
+    const look = camera.getWorldDirection(new THREE.Vector3()).dot(p.clone().sub(camera.position).normalize());
+    game.hud.whiteout(Math.max(0.25, look) * (1 - near / 16));
+  }
+}
+
 function kick() {
   const P = game.player;
   const d = nearestDoor(1.5);
@@ -434,9 +497,9 @@ function menu(loading = 0) {
     <p>Dispatch lost contact with the family at 1147 Alder Road four hours ago.<br>
     Neighbours report chanting. Nobody's come out. You're the only unit on scene.</p>
     <p style="opacity:.65">
-      <kbd>WASD</kbd> move · <kbd>Q</kbd> sprint · <kbd>C</kbd> crouch · <kbd>LMB</kbd> fire · <kbd>Shift</kbd> aim<br>
-      <kbd>R</kbd> reload · <kbd>1</kbd>/<kbd>2</kbd> rifle / shotgun · <kbd>F</kbd> flashlight<br>
-      <kbd>E</kbd> open doors · hold <kbd>E</kbd> free hostages · <kbd>V</kbd> kick</p>
+      <kbd>WASD</kbd> move · <kbd>Space</kbd> sprint · <kbd>C</kbd> crouch · <kbd>Q</kbd>/<kbd>E</kbd> lean<br>
+      <kbd>LMB</kbd> fire · <kbd>RMB</kbd>/<kbd>Shift</kbd> aim · <kbd>R</kbd> reload · <kbd>1</kbd>/<kbd>2</kbd> rifle / shotgun<br>
+      <kbd>G</kbd> flashbang · <kbd>F</kbd> doors &amp; free hostages · <kbd>V</kbd> kick · <kbd>T</kbd> flashlight</p>
     ${game.loadError ? `<p style="color:#e55">Your NPC model failed to load (${game.loadError}). Running with placeholder bodies.</p>` : ''}
     ${ready ? '<div class="go">CLICK TO BREACH</div>' : `<div class="go" style="animation:none">LOADING SUSPECTS · ${Math.round(loading * 100)}%</div>`}`, ready ? start : null);
 }
@@ -471,6 +534,13 @@ let heartT = 0;
 function step(dt) {
   t += dt;
   const live = game.state === 'play' || game.state === 'dead';
+  updateBangs(dt);
+  // the inside of a wounded body only draws up close (each one is ~1M triangles)
+  if (game.goreWorld) for (const k of game.goreWorld.npcs) {
+    if (!k.wounds.length) continue;
+    const near = k.root.position.distanceTo(camera.position) < 9;
+    for (const m of Object.values(k.anat.layers)) m.visible = near;
+  }
   if (live) {
     if (game.state === 'play') game.stats.time += dt;
     game.player.update(dt, I);
@@ -480,7 +550,7 @@ function step(dt) {
 
     // hold E to free a hostage
     const h = game.state === 'play' ? nearestHostage() : null;
-    if (h && I.keys.KeyE) {
+    if (h && I.keys.KeyF) {
       if (freeing !== h) { freeing = h; h.free = 0; }
       h.free += dt / 1.3;
       game.hud.prompt('CUTTING RESTRAINTS…', Math.min(1, h.free));
@@ -489,7 +559,7 @@ function step(dt) {
       if (freeing) freeing.free = 0;
       freeing = null;
       const d = game.state === 'play' ? nearestDoor(1.7) : null;
-      game.hud.prompt(h ? 'Hold <kbd>E</kbd> to free hostage' : d ? `<kbd>E</kbd> ${d.isOpen ? 'close' : 'open'} door · <kbd>V</kbd> kick` : '');
+      game.hud.prompt(h ? 'Hold <kbd>F</kbd> to free hostage' : d ? `<kbd>F</kbd> ${d.isOpen ? 'close' : 'open'} door · <kbd>V</kbd> kick` : '');
     }
     if (game.player.hp < 35 && game.player.alive) {
       heartT -= dt;
@@ -514,7 +584,7 @@ function step(dt) {
 }
 
 // ------------------------------------------------------------ post-process
-const composer = new EffectComposer(renderer, new THREE.WebGLRenderTarget(window.innerWidth, window.innerHeight, { type: THREE.HalfFloatType, samples: 4 }));
+const composer = new EffectComposer(renderer, new THREE.WebGLRenderTarget(window.innerWidth, window.innerHeight, { type: THREE.HalfFloatType, samples: 2 }));
 composer.addPass(new RenderPass(scene, camera));
 const gunPass = new RenderPass(game.weapons.scene, game.weapons.camera);
 gunPass.clear = false;
@@ -561,9 +631,31 @@ function render() {
   composer.render();
 }
 
+// Adaptive resolution: if frames run long, render fewer pixels; claw it back when there's headroom.
+let frameAvg = 16, scaleRes = 1, resT = 0;
+function governor(realDt) {
+  frameAvg += (realDt * 1000 - frameAvg) * 0.05;
+  resT += realDt;
+  if (resT < 1) return;
+  resT = 0;
+  const base = Math.min(window.devicePixelRatio, 1);
+  let next = scaleRes;
+  if (frameAvg > 24 && scaleRes > 0.55) next = Math.max(0.55, scaleRes - 0.15);
+  else if (frameAvg < 14 && scaleRes < 1) next = Math.min(1, scaleRes + 0.1);
+  if (next !== scaleRes) {
+    scaleRes = next;
+    renderer.setPixelRatio(base * scaleRes);
+    composer.setPixelRatio(base * scaleRes);
+  }
+}
+
 function frame() {
-  const dt = Math.min(clock.getDelta(), 0.05);
-  step(dt);
+  const real = Math.min(clock.getDelta(), 0.05);
+  governor(real);
+  // bullet time after a headshot or a limb coming off
+  game.slowmo = Math.max(0, (game.slowmo || 0) - real);
+  const scale = game.slowmo > 0 ? 0.3 + 0.7 * Math.max(0, 1 - game.slowmo / 0.7) ** 2 : 1;
+  step(real * scale);
   render();
   requestAnimationFrame(frame);
 }

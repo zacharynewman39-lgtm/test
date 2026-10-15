@@ -236,6 +236,19 @@ export class Enemy extends Actor {
     this.speedCur = 0;
     this.crouch = 0;
     this.aiming = false;
+    // flashbanged: blind and deaf, hands over the face, staggering
+    if (this.stunT > 0 && this.state !== 'playdead') {
+      this.stunT -= dt;
+      this.flinch = Math.max(this.flinch, 0.3 * Math.abs(Math.sin(t * 9)));
+      this.crouch = this.prone ? 0 : 0.35;
+      this.attackAnim = 1;
+      this.heading += Math.sin(t * 2.3 + this.seed) * dt * 1.5;
+      if (this.stunT <= 0) { this.aware = 1; this.lastKnown = g.player.pos.clone(); if (CALM.has(this.state)) this.engage(); }
+      g.level.collide(this.pos, 0.26);
+      this.root.rotation.y = this.heading;
+      this.pose(dt, t);
+      return;
+    }
     this.perceive(dt);
     if (this.aware >= 1 && CALM.has(this.state) && this.state !== 'playdead') this.engage();
 
@@ -316,6 +329,9 @@ export class Enemy extends Actor {
         if (this.bleed < 6) this.setState(this.hasGun ? 'combat' : 'flee');
         break;
       case 'crawl':
+        // drags himself along, smearing a trail
+        this.smearT = (this.smearT || 0) - dt;
+        if (this.speedCur > 0.05 && this.smearT <= 0 && this.bleed > 0.2) { this.smearT = 0.22; g.gore.smear(this.pos, this.heading); }
         if (flatD > 0.9) this.moveTo(P.pos, 0.35, dt, 0.6);
         else {
           this.turnTo(toP, 3, dt);

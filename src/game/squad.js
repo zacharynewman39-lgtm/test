@@ -38,7 +38,7 @@ export class Squad {
     }
     if (this.alerted) {
       this.visT -= dt;
-      if (this.visT <= 0) { this.visT = 0.35; this.computeVisibility(P.eye); }
+      if (this.visT <= 0) { this.visT = 0.6; this.computeVisibility(P.eye); }
     }
   }
 

@@ -137,6 +137,12 @@ export class Gore {
     this.feet.add(p, UP, 0.16, _c.getHex(), heading + Math.PI, 1.8);
   }
 
+  // A wounded man dragging himself leaves a long smear.
+  smear(pos, heading) {
+    _c.setRGB(0.2, 0.008, 0.008);
+    this.dropDecals.add(new THREE.Vector3(pos.x, 0.0012, pos.z), UP, 0.22, _c.getHex(), heading, 2.2);
+  }
+
   // How much blood is on the floor here (0..1)?
   wetAt(pos) {
     let w = 0;
@@ -313,7 +319,16 @@ export class Gore {
       const o = c.obj;
       o.position.addScaledVector(c.vel, dt);
       o.rotation.x += c.spin.x * dt; o.rotation.y += c.spin.y * dt; o.rotation.z += c.spin.z * dt;
+      const before = o.position.clone();
       this.level.collide(o.position, c.r, 3);
+      // fast meat hitting a wall sticks there and slides a little
+      if (before.distanceToSquared(o.position) > 1e-6 && c.vel.lengthSq() > 4 && o.position.y > 0.3 && !o.userData.muzzle) {
+        const n = o.position.clone().sub(before).setY(0).normalize();
+        this.splat(o.position.clone().addScaledVector(n, -c.r), n, 0.25 + Math.random() * 0.2);
+        if (Math.random() < 0.6) this.wallRun(o.position.clone().addScaledVector(n, -c.r), n, 0.3);
+        c.vel.set(0, -0.15, 0); c.spin.set(0, 0, 0); c.stuck = 2 + Math.random() * 4;
+      }
+      if (c.stuck > 0) { c.stuck -= dt; c.vel.set(0, -0.04, 0); if (c.stuck <= 0) c.vel.set(0, -0.5, 0); }
       if (o.position.y < c.r * 0.6) {
         o.position.y = c.r * 0.6;
         if (Math.abs(c.vel.y) > 1) {

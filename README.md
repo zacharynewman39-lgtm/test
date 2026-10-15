@@ -13,14 +13,18 @@ npm run dev        # open the printed localhost URL
 
 | Input | Action |
 | --- | --- |
-| W A S D / Q / C | Move / sprint / crouch |
-| Mouse, LMB | Look, fire (rifle is semi-auto: one shot per click) |
-| Shift (or RMB) | Aim down sights |
-| R | Reload (the shotgun loads shell by shell; fire to interrupt) |
+| W A S D | Move |
+| Space (hold) | Sprint |
+| C | Crouch (toggle) |
+| Q / E | Lean left / right |
+| Mouse, LMB | Look, fire (rifle is semi-auto) |
+| Shift or RMB | Aim down sights |
+| R | Reload |
 | 1 / 2 or wheel | Rifle / shotgun |
-| F | Flashlight |
-| E | Open/close doors; hold to free a hostage |
-| V | Kick a door open (loud) or kick a suspect back |
+| G | Throw a flashbang (3) |
+| F | Open/close doors; hold to free a hostage |
+| V | Kick a door open or a suspect back |
+| T | Flashlight |
 
 ## What's in it
 

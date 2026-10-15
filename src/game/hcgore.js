@@ -194,7 +194,7 @@ export class HighCalibreGore {
     this.eject(actor, tr.M, res.endBind, tr.rayWorld.direction, energy, res.boneHit ? ['muscle', 'organs', 'skeleton'] : ['muscle', 'organs']);
   }
 
-  eject(actor, M, centreBind, dirW, energy, layers, radius = 0.035) {
+  eject(actor, M, centreBind, dirW, energy, layers, radius = 0.05) {
     const g = this.game;
     for (const layer of layers) {
       const piece = extractPiece(actor.kit, layer, null, centreBind, radius * (layer === 'skeleton' ? 0.8 : 1), M, 1500);
@@ -225,6 +225,8 @@ export class HighCalibreGore {
   headBlowout(actor, tr, res, weapon, pellets) {
     const kit = actor.kit, g = this.game;
     kit.seize = 1; // decerebrate convulsions as he goes down
+    g.slowmo = 0.7;
+    g.hud.spatter(this.game.player.pos.distanceTo(actor.pos) < 4 ? 0.9 : 0.2);
     const head = kit.npc.bone('head');
     const center = head.userData.restHead.clone().add(new THREE.Vector3(0, 0.035, 0.022));
     const pEnd = res.exits ? res.endBind : res.entryBind.clone().addScaledVector(res.dirBind, 0.12);
@@ -452,6 +454,7 @@ export class HighCalibreGore {
     blood.chunks(at, dirW, 4, 6, 2);
     g.gore.mist(at, 0.8);
     g.audio.play('gib', { pos: at, volume: 1.3 });
+    g.slowmo = 0.6;
     g.stats.dismember++;
     this.dangles = this.dangles.filter((d) => !(d.actor === actor && cutBones.has(d.child)));
     actor.onSevered?.(key);

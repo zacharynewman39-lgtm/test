@@ -23,6 +23,7 @@ const CSS = `
 #hud .prompt .prog div { height: 100%; background: #e8e2d4; }
 #hud .warn { position: absolute; left: 50%; top: 22%; transform: translateX(-50%); font-size: 18px; color: #ff4a3a; letter-spacing: 2px; text-shadow: 0 0 8px #000; opacity: 0; transition: opacity .3s; font-weight: 700; }
 #hud .feed { position: absolute; right: 28px; top: 24px; text-align: right; font-size: 12px; line-height: 1.8; letter-spacing: 1px; text-shadow: 0 1px 3px #000; }
+#hud .white { position: absolute; inset: 0; background: #fff; opacity: 0; }
 #hud .vig { position: absolute; inset: 0; background: radial-gradient(ellipse at center, transparent 45%, rgba(120,0,0,.85) 100%); opacity: 0; }
 #hud .splat { position: absolute; inset: 0; opacity: 0; background:
   radial-gradient(circle at 12% 20%, rgba(90,0,0,.7) 0 6%, transparent 9%),
@@ -53,7 +54,7 @@ export class HUD {
     const el = document.createElement('div');
     el.id = 'hud';
     el.innerHTML = `
-      <div class="vig"></div><div class="splat"></div>
+      <div class="vig"></div><div class="splat"></div><div class="white"></div>
       <div class="dmgdir"><i></i></div>
       <div class="xh"><i class="dot"></i><i class="l"></i><i class="r"></i><i class="t"></i><i class="b"></i></div>
       <div class="hit"></div>
@@ -107,7 +108,9 @@ export class HUD {
 
     this.vigOpacity = Math.max(P.hp < 35 ? 0.35 + 0.15 * Math.sin(performance.now() / 300) : 0, this.vigOpacity - dt * 1.2);
     this.q('.vig').style.opacity = this.vigOpacity;
-    this.splatOpacity = Math.max(0, this.splatOpacity - dt * 0.25);
+    this.splatOpacity = Math.max(0, this.splatOpacity - dt * 0.18);
+    this.whiteT = Math.max(0, (this.whiteT || 0) - dt);
+    this.q('.white').style.opacity = Math.min(1, this.whiteT);
     this.q('.splat').style.opacity = this.splatOpacity;
     this.hitT -= dt;
     if (this.hitT <= 0) this.q('.hit').style.opacity = 0;
@@ -124,6 +127,8 @@ export class HUD {
   }
 
   spatter(amount) { this.splatOpacity = Math.min(1, this.splatOpacity + amount); }
+
+  whiteout(a) { this.whiteT = Math.max(this.whiteT || 0, a * 4); }
 
   hitmarker(kill) {
     const h = this.q('.hit');

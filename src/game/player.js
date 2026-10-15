@@ -26,7 +26,7 @@ export class FPSPlayer {
     this.flashlight = true;
     this.torch = new THREE.SpotLight(0xfff1dc, 30, 32, 0.55, 0.55, 1.3);
     this.torch.castShadow = true;
-    this.torch.shadow.mapSize.set(1024, 1024);
+    this.torch.shadow.mapSize.set(512, 512);
     this.torch.shadow.bias = -0.0004;
     this.torch.shadow.camera.near = 0.1;
     this.torch.position.set(0.18, -0.12, 0.05);
@@ -34,7 +34,9 @@ export class FPSPlayer {
     camera.add(this.torch, this.torch.target);
   }
 
-  get eye() { return this._eye.set(this.pos.x, this.pos.y + THREE.MathUtils.lerp(STAND_EYE, CROUCH_EYE, this.crouch), this.pos.z); }
+  get eye() {
+    return this._eye.set(this.pos.x + (this.leanOff?.x || 0), this.pos.y + THREE.MathUtils.lerp(STAND_EYE, CROUCH_EYE, this.crouch) - Math.abs(this.lean || 0) * 0.06, this.pos.z + (this.leanOff?.z || 0));
+  }
   chestPoint() { return new THREE.Vector3(this.pos.x, this.pos.y + THREE.MathUtils.lerp(1.3, 0.8, this.crouch), this.pos.z); }
   forward(out = new THREE.Vector3()) { return this.camera.getWorldDirection(out); }
 
@@ -80,7 +82,7 @@ export class FPSPlayer {
     const g = this.game;
     const k = input.keys;
     if (this.alive) {
-      this.crouched = !!k.KeyC;
+      this.crouched = !!this.crouchToggle;
       const fwd = new THREE.Vector3(-Math.sin(this.yaw), 0, -Math.cos(this.yaw));
       const right = new THREE.Vector3(-fwd.z, 0, fwd.x);
       const wish = new THREE.Vector3();
@@ -88,19 +90,39 @@ export class FPSPlayer {
       if (k.KeyS) wish.sub(fwd);
       if (k.KeyD) wish.add(right);
       if (k.KeyA) wish.sub(right);
-      this.sprinting = !!k.KeyQ && !!k.KeyW && !this.crouched && !g.weapons.aiming;
-      let speed = this.crouched ? 1.6 : this.sprinting ? 5.4 : 3.1;
+      this.sprinting = !!k.Space && !!k.KeyW && !g.weapons.aiming;
+      if (this.sprinting && this.crouchToggle) this.crouchToggle = false; // sprinting stands you up
+      let speed = this.crouched ? 1.7 : this.sprinting ? 5.8 : 3.3;
+      // lean: Q left, E right (peek round corners without stepping out)
+      this.leanTarget = (k.KeyE ? 1 : 0) - (k.KeyQ ? 1 : 0);
+      if (this.sprinting) this.leanTarget = 0;
       if (g.weapons.aiming) speed *= 0.6;
       if (this.hp < 30) speed *= 0.8;
       if (wish.lengthSq() > 0) wish.normalize().multiplyScalar(speed);
-      const a = 1 - Math.exp(-10 * dt);
+      // momentum: quick to start, a little slide to stop
+      const a = 1 - Math.exp(-(wish.lengthSq() > 0 ? 11 : 7) * dt);
       this.vel.x += (wish.x - this.vel.x) * a;
       this.vel.z += (wish.z - this.vel.z) * a;
+      this.strafe = right.dot(this.vel);
     } else {
       this.vel.multiplyScalar(0.9);
       this.crouched = true;
     }
     this.crouch += ((this.crouched ? 1 : 0) - this.crouch) * (1 - Math.exp(-10 * dt));
+    // lean, stopped short by walls so the camera never clips through
+    this.lean = (this.lean || 0) + ((this.leanTarget || 0) - (this.lean || 0)) * (1 - Math.exp(-9 * dt));
+    const side = new THREE.Vector3(Math.cos(this.yaw), 0, -Math.sin(this.yaw));
+    let reach = 0.42 * this.lean;
+    if (Math.abs(reach) > 0.01) {
+      const from = new THREE.Vector3(this.pos.x, this.pos.y + THREE.MathUtils.lerp(STAND_EYE, CROUCH_EYE, this.crouch), this.pos.z);
+      const dir = side.clone().multiplyScalar(Math.sign(reach));
+      this._ray ||= new THREE.Raycaster();
+      this._ray.set(from, dir);
+      this._ray.far = Math.abs(reach) + 0.15;
+      const hit = this._ray.intersectObjects(g.level.occluders, false)[0];
+      if (hit) reach = Math.sign(reach) * Math.max(0, hit.distance - 0.15);
+    }
+    this.leanOff = side.multiplyScalar(reach);
     this.pos.addScaledVector(this.vel, dt);
     for (const e of g.enemies) { // don't walk through standing suspects
       if (e.dead || e.prone || e.state === 'playdead') continue;
@@ -137,12 +159,13 @@ export class FPSPlayer {
     const cam = this.camera;
     const e = this.eye;
     const bobAmt = Math.min(this.speed / 3, 1.6) * (this.crouched ? 0.5 : 1);
-    cam.position.set(e.x, e.y + Math.sin(this.bob * 2) * 0.025 * bobAmt, e.z);
+    cam.position.set(e.x, e.y + Math.sin(this.bob * 2) * 0.022 * bobAmt, e.z);
+    this.tilt = (this.tilt || 0) + ((-(this.strafe || 0) * 0.012 - this.lean * 0.22) - (this.tilt || 0)) * (1 - Math.exp(-8 * dt));
     if (!this.alive) cam.position.y = Math.max(0.3, cam.position.y - 0.6);
     const sh = this.shake * this.shake;
     cam.rotation.set(
       this.pitch + (Math.random() - 0.5) * sh * 0.05,
       this.yaw + (Math.random() - 0.5) * sh * 0.05 + Math.sin(this.bob) * 0.004 * bobAmt,
-      (this.alive ? 0 : 0.6) + (Math.random() - 0.5) * sh * 0.03, 'YXZ');
+      (this.alive ? this.tilt : 0.6) + (Math.random() - 0.5) * sh * 0.03, 'YXZ');
   }
 }

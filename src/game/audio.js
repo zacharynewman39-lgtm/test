@@ -118,6 +118,8 @@ function build() {
   S.reload = normalize(mix([click(2500), 1], [click(1800), 1, 0.12], [click(3000), 0.8, 0.9], [click(2000), 1, 1.0]), 0.5);
   S.pump = normalize(mix([click(1400), 1], [click(1100), 1, 0.18]), 0.6);
   S.shell = normalize(mix([click(3500), 1]), 0.4);
+  S.hit = normalize(mix([click(4200), 1], [click(2600), 0.6, 0.012]), 0.5);
+  S.kill = normalize(mix([env(tone(0.18, 140), (t) => Math.exp(-t * 25)), 1], [click(3000), 0.8], [click(1800), 0.7, 0.05]), 0.7);
   S.empty = normalize(click(3000), 0.5);
   S.hurt = normalize(mix([env(tone(0.25, 70), (t) => Math.exp(-t * 18)), 1], [env(biquad(noise(0.2), 'lp', 600), (t) => Math.exp(-t * 20)), 0.6]));
   S.thud = normalize(mix([env(biquad(noise(0.5), 'lp', 220), (t) => Math.exp(-t * 12)), 1], [env(tone(0.3, 48), (t) => Math.exp(-t * 14)), 1]), 0.8);
