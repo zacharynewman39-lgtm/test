@@ -425,6 +425,7 @@ export function buildLevel(scene, renderer) {
   point(9.0, 2.4, 2.2, 0xe0f0ff, 3.5, 6, 'buzz'); // bathroom
   point(7.9, 2.4, 9.9, 0xffe0b8, 2.5, 6, 'soft'); // entry
   point(11.0, 2.45, 5.0, 0xffe0b0, 7.0, 9, 'dying', 256); // hall bulb
+  level.lights = lights;
   const red = point(2.6, 1.6, 17.2, 0xff1010, 0, 7, null);
   const blue = point(3.8, 1.6, 17.4, 0x1030ff, 0, 7, null);
 
