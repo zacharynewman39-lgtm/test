@@ -48,7 +48,7 @@ const lookDot = (p) => view().dot(p.clone().sub(camera.position).normalize());
 // ------------------------------------------------------------------ it
 const tex = new THREE.TextureLoader().load(IMG);
 tex.colorSpace = THREE.SRGBColorSpace;
-const itMat = new THREE.MeshStandardMaterial({ map: tex, alphaTest: 0.5, roughness: 1, side: THREE.DoubleSide, transparent: true });
+const itMat = new THREE.MeshStandardMaterial({ map: tex, emissiveMap: tex, emissive: 0x666666, alphaTest: 0.5, roughness: 1, side: THREE.DoubleSide });
 const it = new THREE.Mesh(new THREE.PlaneGeometry(0.52, 1.78).translate(0, 0.89, 0), itMat);
 it.castShadow = true;
 it.visible = false;
@@ -56,12 +56,13 @@ scene.add(it);
 const itHead = () => it.position.clone().setY(1.55);
 
 // photos to find
-const photoMat = new THREE.MeshStandardMaterial({ color: 0xf2eee0, emissive: 0x332a18, roughness: 0.6 });
-const PHOTO_SPOTS = [[2.0, 1.4, 0.56], [14.8, 1.35, 0.52], [19.0, 2.2, 0.92]];
+const photoMat = new THREE.MeshStandardMaterial({ color: 0xf2eee0, emissive: 0x8a7550, roughness: 0.6 });
+const PHOTO_SPOTS = [[2.4, 3.0, 0.56], [14.2, 2.4, 0.52], [18.6, 2.3, 0.92]];
 const photos = PHOTO_SPOTS.map(([x, z, y]) => {
   const m = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.004, 0.13), photoMat);
   m.position.set(x, y + 0.003, z);
   m.rotation.y = Math.random() * 3;
+  m.scale.setScalar(1.6);
   scene.add(m);
   return m;
 });
@@ -147,7 +148,7 @@ addEventListener('resize', () => { camera.aspect = innerWidth / innerHeight; cam
 
 function interact() {
   for (const ph of photos) {
-    if (ph.visible && ph.position.distanceTo(camera.position) < 1.6) {
+    if (ph.visible && Math.hypot(ph.position.x - P.pos.x, ph.position.z - P.pos.z) < 2.1) {
       ph.visible = false;
       found++;
       A.play('empty', { volume: 0.7, rate: 0.8 });
@@ -169,9 +170,11 @@ function interact() {
 
 // --------------------------------------------------------------- director
 // One thing happens at a time; the gaps get shorter the longer you're inside.
-let dread = 0, scares = 0, event = null, nextAt = 14, eventT = 0, blackout = 0, torchFail = 0;
+let dread = 0, scares = 0, event = null, nextAt = 60, eventT = 0, blackout = 0, torchFail = 0;
 let scareT = 0, stamina = 1, beatT = 0;
 let pending = null;
+// the opening is scripted so you meet it early
+const script = [[6, 'glimpse'], [24, 'footsteps'], [45, 'doorway']];
 function schedule(kind, inS) { pending = { kind, at: clockT + inS }; }
 
 function cellsAround(minD, maxD, filter) {
@@ -190,13 +193,15 @@ function start(kind) {
   event = { kind, t: 0, stare: 0 };
   if (kind === 'glimpse') {
     // at the edge of your vision, down a hall or across a room
-    const spots = cellsAround(5, 12, (c) => { const k = lookDot(c.clone().setY(1.5)); return k > 0.25 && k < 0.85 && los(camera.position, c.clone().setY(1.5)); });
-    if (!spots.length) return end(6);
+    let spots = cellsAround(4, 12, (c) => { const k = lookDot(c.clone().setY(1.5)); return k > 0.25 && k < 0.88 && los(camera.position, c.clone().setY(1.5)); });
+    if (!spots.length) spots = cellsAround(3, 14, (c) => lookDot(c.clone().setY(1.5)) > 0.2 && los(camera.position, c.clone().setY(1.5)));
+    if (!spots.length) return start('behind');
     it.position.copy(pick(spots)); it.visible = true;
     A.play('whisper', { pos: it.position, volume: 0.7 });
   } else if (kind === 'doorway') {
     const doors = L.doors.filter((d) => d !== game.frontDoor && d.center.distanceTo(P.pos) > 5 && los(camera.position, d.center.clone().setY(1.5)));
     if (!doors.length) return start('glimpse');
+    event.kind = 'doorway';
     const d = pick(doors);
     if (!d.isOpen) d.open(P.pos);
     it.position.set(d.center.x, 0, d.center.z); it.visible = true;
@@ -208,8 +213,12 @@ function start(kind) {
     event.steps = 0;
   } else if (kind === 'behind') {
     const back = view().setY(0).normalize().negate();
-    const p = P.pos.clone().addScaledVector(back, 1.25);
-    if (!L.walkable(Math.floor(p.x), Math.floor(p.z)) || !los(camera.position, p.clone().setY(1.2))) return end(3);
+    let p = P.pos.clone().addScaledVector(back, 1.25);
+    if (!L.walkable(Math.floor(p.x), Math.floor(p.z)) || !los(camera.position, p.clone().setY(1.2))) {
+      const near = cellsAround(1, 3.5, (c) => los(camera.position, c.clone().setY(1.2)) && lookDot(c.clone().setY(1.2)) < 0.2);
+      if (!near.length) return end(4);
+      p = pick(near);
+    }
     it.position.copy(p).setY(0); it.visible = true;
     A.play('whisper', { pos: it.position, volume: 1.2, rate: 0.7 });
   } else if (kind === 'blackout') {
@@ -234,9 +243,10 @@ function updateEvent(dt) {
     case 'glimpse':
     case 'doorway':
       // look straight at it and it's gone
-      if (looking) e.stare += dt;
-      if (e.stare > (e.kind === 'doorway' ? 0.5 : 0.18)) { sting(e.kind === 'doorway' ? 0.5 : 0.8); dread = Math.min(1, dread + 0.08); end(); }
-      else if (e.t > 6) end();
+      // you get a good look at it first; then it's gone
+      if (looking) { if (!e.seen) { e.seen = true; sting(0.6, true); } e.stare += dt; }
+      if (e.stare > (e.kind === 'doorway' ? 1.4 : 0.9)) { sting(e.kind === 'doorway' ? 0.5 : 0.8); dread = Math.min(1, dread + 0.08); end(); }
+      else if (e.t > 9) end();
       else if (d < 2.2) jumpscare();
       break;
     case 'footsteps': {
@@ -250,7 +260,7 @@ function updateEvent(dt) {
           // turn around...
           const back = P.pos.clone().sub(view().setY(0).normalize().multiplyScalar(1.2));
           it.position.copy(back).setY(0);
-          it.visible = Math.random() < 0.55;
+          it.visible = scares === 0 || Math.random() < 0.8;
           A.play('whisper', { pos: it.position, volume: 1.3, rate: 0.6 });
         }
       }
@@ -318,6 +328,7 @@ function frame() {
     if (scareT > 0) { scareT -= dt; if (scareT <= 0) scareEl.style.display = 'none'; }
     if (event) updateEvent(dt);
     else if (pending && clockT >= pending.at) { const k = pending.kind; pending = null; start(k); }
+    else if (script.length && clockT > script[0][0]) start(script.shift()[1]);
     else if (clockT > nextAt) {
       const r = Math.random();
       start(r < 0.32 ? 'glimpse' : r < 0.5 ? 'doorway' : r < 0.72 ? 'footsteps' : r < 0.85 ? 'behind' : 'blackout');
@@ -334,7 +345,7 @@ function frame() {
   torchFail = Math.max(0, torchFail - dt);
   for (const Lt of L.lights) {
     if (!Lt.flicker) Lt.light.intensity = Lt.base;
-    Lt.light.intensity *= blackout ? 0 : 0.55;
+    Lt.light.intensity *= blackout ? 0 : 0.7;
   }
   const flick = torchFail > 0 ? (Math.random() < 0.15 ? 0.4 : 0) : (Math.random() < 0.004 ? 0.1 : 1);
   P.torch.intensity = P.flashlight ? 24 * flick : 0;
@@ -342,6 +353,9 @@ function frame() {
   msgT -= dt;
   if (msgT <= 0) msgEl.style.opacity = 0;
   hud.innerHTML = `PHOTOS ${found}/3${found === 3 ? '<br>GET OUT' : ''}`;
+  if (playing && msgT <= 0 && photos.some((ph) => ph.visible && Math.hypot(ph.position.x - P.pos.x, ph.position.z - P.pos.z) < 2.1)) {
+    msgEl.innerHTML = 'Press <b>F</b> to take the photo'; msgEl.style.opacity = 1;
+  }
   $('#stam div').style.width = stamina * 100 + '%';
   $('#stam').style.opacity = stamina < 0.98 ? 1 : 0;
   // it always turns to face you
@@ -365,5 +379,6 @@ function win() {
   ov.querySelector('div').innerHTML = `<h1>YOU GOT OUT</h1><p>It let you leave this time.</p><p>Scared ${scares} time${scares === 1 ? '' : 's'} · ${Math.floor(clockT / 60)}:${String(Math.floor(clockT % 60)).padStart(2, '0')}</p><p>CLICK TO GO BACK IN</p>`;
 }
 
+window.__scare = { start, jumpscare, get event() { return event; }, P, it, photos, interact, get found() { return found; } };
 P.update(0, { keys: {} });
 frame();
