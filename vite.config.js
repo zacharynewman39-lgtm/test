@@ -5,7 +5,8 @@ export default defineConfig({
   build: {
     rollupOptions: {
       input: {
-        game: fileURLToPath(new URL('./index.html', import.meta.url)),
+        scare: fileURLToPath(new URL('./index.html', import.meta.url)),
+        game: fileURLToPath(new URL('./game.html', import.meta.url)),
         sandbox: fileURLToPath(new URL('./sandbox.html', import.meta.url)),
       },
     },
